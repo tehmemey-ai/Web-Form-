@@ -1,0 +1,5 @@
+{
+  "name": "Internal Data Requesting Form.ai",
+  "description": "A smart data request portal that uses Gemini to help users refine their request descriptions and automatically categorize data needs.",
+  "requestFramePermissions": []
+}
