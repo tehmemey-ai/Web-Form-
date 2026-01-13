@@ -200,7 +200,7 @@ const App: React.FC = () => {
                 name="description"
                 value={formData.description}
                 onChange={handleChange}
-                placeholder="Describe the data you need. Example: I need a list of all transactions from last month..."
+                placeholder="Describe the data you need. Example: Rekap Data Proyek OSS Tahun 2024..."
                 required
                 action={
                     <button
@@ -231,7 +231,7 @@ const App: React.FC = () => {
                 value={formData.category}
                 onChange={handleChange}
                 options={[
-                  { value: RequestCategory.UNSPECIFIED, label: 'Select a category...' },
+                  { value: RequestCategory.UNSPECIFIED, label: 'Pilih Tujuan Kebutuhan Data...' },
                   { value: RequestCategory.Bahan_Paparan, label: 'Bahan Paparan' },
                   { value: RequestCategory.Bahan_Perencanaan_dan_Penyusunan_Kebijakan, label: 'Bahan Perencanaan dan Penyusunan Kebijakan' },
                   { value: RequestCategory.Bahan_Publikasi, label: 'Bahan Publikasi' },
