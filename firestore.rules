@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: requests
+    // Document ID: auto-generated
+    // Fields:
+    //   - fullName: string (required)
+    //   - email: string (required, email format)
+    //   - handphone: string (required)
+    //   - department: string (required)
+    //   - category: string (optional)
+    //   - urgency: string (optional)
+    //   - description: string (required, < 5000 chars)
+    //   - dateRangeStart: string (optional)
+    //   - dateRangeEnd: string (optional)
+    //   - createdAt: timestamp (required)
+    //   - status: string (required, enum: ['PENDING', 'PROCESSING', 'COMPLETED', 'REJECTED'])
+    //   - uid: string (required, owner ID)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+         (request.auth.token.email == "tehmemey@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidRequest(data) {
+      return data.fullName is string && data.fullName.size() > 0 && data.fullName.size() < 100 &&
+             data.email is string && isValidEmail(data.email) &&
+             data.handphone is string && data.handphone.size() > 0 && data.handphone.size() < 20 &&
+             data.department is string && data.department.size() > 0 && data.department.size() < 100 &&
+             data.description is string && data.description.size() > 0 && data.description.size() < 5000 &&
+             data.status in ['PENDING', 'PROCESSING', 'COMPLETED', 'REJECTED'] &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /requests/{requestId} {
+      // Anyone authenticated can create a request
+      allow create: if isAuthenticated() && 
+                      isValidRequest(request.resource.data) && 
+                      request.resource.data.uid == request.auth.uid;
+      
+      // Users can read their own requests, admins can read all
+      allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
+      
+      // Only admins can update status or other fields
+      allow update: if isAuthenticated() && isAdmin() && isValidRequest(request.resource.data);
+      
+      // Only admins can delete requests
+      allow delete: if isAuthenticated() && isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow write: if isAuthenticated() && isAdmin();
+    }
+  }
+}

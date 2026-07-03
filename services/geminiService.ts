@@ -2,9 +2,9 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { RequestCategory, CategorySuggestionResponse } from "../types";
 
 const getClient = () => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.error("API_KEY is missing from environment variables.");
+    console.error("GEMINI_API_KEY is missing from environment variables.");
     throw new Error("API Key missing");
   }
   return new GoogleGenAI({ apiKey });
@@ -15,7 +15,7 @@ export const refineDescription = async (text: string): Promise<string> => {
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: `You are a professional business communication assistant. 
       Rewrite the following data request description to be more precise, professional, and clear. 
       Keep the core intent but improve the phrasing for a technical data team.
@@ -39,11 +39,12 @@ export const suggestCategory = async (description: string): Promise<CategorySugg
       category: {
         type: Type.STRING,
         enum: [
-            RequestCategory.FINANCIAL,
-            RequestCategory.USER_ANALYTICS,
-            RequestCategory.OPERATIONAL,
-            RequestCategory.MARKETING,
-            RequestCategory.SECURITY,
+            RequestCategory.Bahan_Paparan,
+            RequestCategory.Bahan_Perencanaan_dan_Penyusunan_Kebijakan,
+            RequestCategory.Bahan_Publikasi,
+            RequestCategory.Bahan_Monitoring_dan_Evaluasi,
+            RequestCategory.Penelitian,
+            RequestCategory.TL_Disposisi,
             RequestCategory.OTHER
         ],
         description: "The most suitable category for the data request."
@@ -62,7 +63,7 @@ export const suggestCategory = async (description: string): Promise<CategorySugg
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: `Analyze the following data request description and categorize it into one of the defined categories.
       
       Description: "${description}"`,

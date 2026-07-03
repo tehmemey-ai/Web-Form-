@@ -1,0 +1,29 @@
+{
+  "entities": {
+    "DataRequest": {
+      "title": "Data Request",
+      "description": "A request for internal data or reports.",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string", "description": "The full name of the requester." },
+        "email": { "type": "string", "format": "email", "description": "The email address of the requester." },
+        "handphone": { "type": "string", "description": "The phone number of the requester." },
+        "department": { "type": "string", "description": "The unit or department of the requester." },
+        "category": { "type": "string", "description": "The category of the request (e.g., ANALYTICS, REPORTING)." },
+        "urgency": { "type": "string", "description": "The urgency level of the request." },
+        "description": { "type": "string", "description": "Detailed description of the data needed." },
+        "dateRangeStart": { "type": "string", "description": "Start date for the requested data." },
+        "dateRangeEnd": { "type": "string", "description": "End date for the requested data." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the request was created." },
+        "status": { "type": "string", "enum": ["PENDING", "PROCESSING", "COMPLETED", "REJECTED"], "description": "The current status of the request." }
+      },
+      "required": ["fullName", "email", "handphone", "department", "description", "createdAt"]
+    }
+  },
+  "firestore": {
+    "requests": {
+      "schema": "DataRequest",
+      "description": "Collection of data requests submitted by users."
+    }
+  }
+}
