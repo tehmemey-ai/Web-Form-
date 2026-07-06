@@ -7,7 +7,8 @@ import TextArea from './components/TextArea';
 import Button from './components/Button';
 import { 
   MagicIcon, SuccessIcon, SendIcon, FormIcon, DashboardIcon, Spinner, 
-  LogOutIcon, UserIcon, ClockIcon, DoneIcon, XIcon, DownloadIcon, TrashIcon 
+  LogOutIcon, UserIcon, ClockIcon, DoneIcon, XIcon, DownloadIcon, TrashIcon,
+  PaperclipIcon, EyeIcon, UploadIcon, CloseIcon
 } from './components/Icons';
 import { auth, db, signInWithGoogle, logout } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -48,7 +49,12 @@ const App: React.FC = () => {
     urgency: UrgencyLevel.MEDIUM,
     description: '',
     dateRangeStart: '',
-    dateRangeEnd: ''
+    dateRangeEnd: '',
+    otherCategoryReason: '',
+    supportingDocName: '',
+    supportingDocSize: undefined,
+    supportingDocType: '',
+    supportingDocUrl: ''
   });
 
   const [requests, setRequests] = useState<DataRequest[]>([]);
@@ -147,6 +153,48 @@ const App: React.FC = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setFileError(null);
+    if (!file) return;
+
+    // Check file size (limit to 800KB)
+    const MAX_SIZE = 800 * 1024; // 819200 bytes
+    if (file.size > MAX_SIZE) {
+      setFileError('File terlalu besar! Batas maksimal ukuran file adalah 800KB agar aman saat dikirim.');
+      e.target.value = ''; // Reset input
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setFormData(prev => ({
+        ...prev,
+        supportingDocName: file.name,
+        supportingDocSize: file.size,
+        supportingDocType: file.type,
+        supportingDocUrl: reader.result as string
+      }));
+    };
+    reader.onerror = () => {
+      setFileError('Gagal membaca file. Silakan coba lagi.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveFile = () => {
+    setFormData(prev => ({
+      ...prev,
+      supportingDocName: '',
+      supportingDocSize: undefined,
+      supportingDocType: '',
+      supportingDocUrl: ''
+    }));
+    setFileError(null);
+  };
+
   const handleMagicRefine = async () => {
     if (!formData.description.trim()) return;
 
@@ -223,7 +271,12 @@ const App: React.FC = () => {
       urgency: UrgencyLevel.MEDIUM,
       description: '',
       dateRangeStart: '',
-      dateRangeEnd: ''
+      dateRangeEnd: '',
+      otherCategoryReason: '',
+      supportingDocName: '',
+      supportingDocSize: undefined,
+      supportingDocType: '',
+      supportingDocUrl: ''
     });
     setAiReasoning(null);
   };
@@ -241,6 +294,9 @@ const App: React.FC = () => {
       'Handphone': req.handphone,
       'Department': req.department,
       'Category': req.category,
+      'Other Category Reason': req.otherCategoryReason || '',
+      'Supporting Document': req.supportingDocName || '',
+      'Has Document?': req.supportingDocUrl ? 'Yes' : 'No',
       'Description': req.description,
       'Start Date': req.dateRangeStart,
       'End Date': req.dateRangeEnd,
@@ -481,23 +537,36 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                   <Select
-                    label="Category"
-                    name="category"
-                    value={formData.category}
-                    onChange={handleChange}
-                    options={[
-                      { value: RequestCategory.UNSPECIFIED, label: 'Pilih Tujuan Kebutuhan Data...' },
-                      { value: RequestCategory.Bahan_Paparan, label: 'Bahan Paparan' },
-                      { value: RequestCategory.Bahan_Perencanaan_dan_Penyusunan_Kebijakan, label: 'Bahan Perencanaan dan Penyusunan Kebijakan' },
-                      { value: RequestCategory.Bahan_Publikasi, label: 'Bahan Publikasi' },
-                      { value: RequestCategory.Bahan_Monitoring_dan_Evaluasi, label: 'Bahan Monitoring dan Evaluasi' },
-                      { value: RequestCategory.Penelitian, label: 'Penelitian' },
-                      { value: RequestCategory.TL_Disposisi, label: 'TL Disposisi Surat Masuk dll' },
-                      { value: RequestCategory.OTHER, label: 'Other' },
-                    ]}
-                    required
-                  />
+                   <div className="space-y-4">
+                     <Select
+                      label="Category"
+                      name="category"
+                      value={formData.category}
+                      onChange={handleChange}
+                      options={[
+                        { value: RequestCategory.UNSPECIFIED, label: 'Pilih Tujuan Kebutuhan Data...' },
+                        { value: RequestCategory.Bahan_Paparan, label: 'Bahan Paparan' },
+                        { value: RequestCategory.Bahan_Perencanaan_dan_Penyusunan_Kebijakan, label: 'Bahan Perencanaan dan Penyusunan Kebijakan' },
+                        { value: RequestCategory.Bahan_Publikasi, label: 'Bahan Publikasi' },
+                        { value: RequestCategory.Bahan_Monitoring_dan_Evaluasi, label: 'Bahan Monitoring dan Evaluasi' },
+                        { value: RequestCategory.Penelitian, label: 'Penelitian' },
+                        { value: RequestCategory.TL_Disposisi, label: 'TL Disposisi Surat Masuk dll' },
+                        { value: RequestCategory.OTHER, label: 'Other' },
+                      ]}
+                      required
+                    />
+
+                    {formData.category === RequestCategory.OTHER && (
+                      <Input
+                        label="Alasan / Tujuan Lainnya"
+                        name="otherCategoryReason"
+                        value={formData.otherCategoryReason || ''}
+                        onChange={handleChange}
+                        placeholder="Ketik alasan atau tujuan data lainnya..."
+                        required
+                      />
+                    )}
+                   </div>
                    <div className="flex gap-2">
                       <div className="w-1/2">
                           <Input
@@ -518,6 +587,80 @@ const App: React.FC = () => {
                           />
                       </div>
                    </div>
+                </div>
+
+                {/* Supporting Document Upload Component */}
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Supporting Document / Dokumen Pendukung (Optional)
+                  </label>
+                  <div className={`border-2 border-dashed rounded-xl p-4 transition-all duration-300 ${
+                    formData.supportingDocName 
+                      ? 'border-emerald-300 bg-emerald-50/30' 
+                      : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+                  }`}>
+                    {!formData.supportingDocName ? (
+                      <div className="flex flex-col items-center justify-center space-y-2 text-center py-2">
+                        <UploadIcon className="w-8 h-8 text-slate-400" />
+                        <div className="text-sm text-slate-600">
+                          <label className="relative cursor-pointer bg-white rounded-md font-semibold text-indigo-600 hover:text-indigo-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500 px-2 py-1 border border-slate-200 shadow-sm transition-all inline-block">
+                            <span>Pilih File</span>
+                            <input 
+                              type="file" 
+                              className="sr-only" 
+                              onChange={handleFileChange}
+                              accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                            />
+                          </label>
+                          <span className="pl-1 text-slate-500">atau seret file ke sini</span>
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          PDF, Word, Excel, atau Gambar (Maksimal 800KB)
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between bg-white rounded-lg border border-emerald-100 p-3 shadow-sm">
+                        <div className="flex items-center space-x-3 overflow-hidden">
+                          <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600 flex-shrink-0">
+                            <PaperclipIcon className="w-5 h-5" />
+                          </div>
+                          <div className="text-left overflow-hidden">
+                            <p className="text-sm font-medium text-slate-700 truncate max-w-[200px] md:max-w-xs">
+                              {formData.supportingDocName}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {(formData.supportingDocSize ? (formData.supportingDocSize / 1024).toFixed(1) : 0)} KB
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          {formData.supportingDocUrl && (
+                            <a 
+                              href={formData.supportingDocUrl} 
+                              download={formData.supportingDocName}
+                              className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-700 transition-colors"
+                              title="Download File"
+                            >
+                              <DownloadIcon className="w-4 h-4" />
+                            </a>
+                          )}
+                          <button 
+                            type="button" 
+                            onClick={handleRemoveFile}
+                            className="p-1.5 hover:bg-rose-50 rounded-lg text-rose-500 hover:text-rose-700 transition-colors"
+                            title="Hapus File"
+                          >
+                            <CloseIcon className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {fileError && (
+                      <p className="text-xs text-rose-500 font-medium mt-2 flex items-center">
+                        <span className="mr-1">⚠️</span> {fileError}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 <div className="pt-4 border-t border-slate-100 flex justify-end">
@@ -771,7 +914,7 @@ const App: React.FC = () => {
                           {req.description}
                         </h3>
                         
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mt-4">
                           <div className="flex items-center text-xs text-slate-500 bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
                             <UserIcon className="w-3.5 h-3.5 mr-2 text-slate-400" />
                             <div className="flex flex-col">
@@ -783,7 +926,10 @@ const App: React.FC = () => {
                             <FormIcon className="w-3.5 h-3.5 mr-2 text-slate-400" />
                             <div className="flex flex-col">
                               <span className="font-semibold text-slate-700">Category</span>
-                              <span className="text-[10px] opacity-75">{req.category}</span>
+                              <span className="text-[10px] opacity-75">
+                                {req.category}
+                                {req.category === 'Other' && req.otherCategoryReason && ` (${req.otherCategoryReason})`}
+                              </span>
                             </div>
                           </div>
                           {(req.dateRangeStart || req.dateRangeEnd) && (
@@ -792,6 +938,28 @@ const App: React.FC = () => {
                               <div className="flex flex-col">
                                 <span className="font-semibold text-slate-700">Periode</span>
                                 <span className="text-[10px] opacity-75">{req.dateRangeStart || '?'} to {req.dateRangeEnd || '?'}</span>
+                              </div>
+                            </div>
+                          )}
+                          {req.supportingDocName && (
+                            <div className="flex items-center text-xs text-slate-500 bg-emerald-50/50 border border-emerald-100 px-2 py-1.5 rounded-lg">
+                              <PaperclipIcon className="w-3.5 h-3.5 mr-2 text-emerald-500 flex-shrink-0" />
+                              <div className="flex flex-col min-w-0 flex-1">
+                                <span className="font-semibold text-emerald-800 truncate" title={req.supportingDocName}>
+                                  {req.supportingDocName}
+                                </span>
+                                {req.supportingDocUrl ? (
+                                  <a 
+                                    href={req.supportingDocUrl} 
+                                    download={req.supportingDocName}
+                                    className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold underline flex items-center mt-0.5"
+                                  >
+                                    <DownloadIcon className="w-2.5 h-2.5 mr-1" />
+                                    Download Dokumen
+                                  </a>
+                                ) : (
+                                  <span className="text-[10px] opacity-75">No download available</span>
+                                )}
                               </div>
                             </div>
                           )}

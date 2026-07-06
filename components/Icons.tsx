@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader2, Wand2, CheckCircle2, AlertCircle, Send, FileText, LayoutDashboard, LogOut, User, Clock, CheckCircle, XCircle, Download, Trash2 } from 'lucide-react';
+import { Loader2, Wand2, CheckCircle2, AlertCircle, Send, FileText, LayoutDashboard, LogOut, User, Clock, CheckCircle, XCircle, Download, Trash2, Paperclip, Eye, FileUp, X } from 'lucide-react';
 
 export const Spinner = ({ className }: { className?: string }) => (
   <Loader2 className={`animate-spin ${className}`} />
@@ -56,3 +56,20 @@ export const DownloadIcon = ({ className }: { className?: string }) => (
 export const TrashIcon = ({ className }: { className?: string }) => (
     <Trash2 className={className} />
 );
+
+export const PaperclipIcon = ({ className }: { className?: string }) => (
+    <Paperclip className={className} />
+);
+
+export const EyeIcon = ({ className }: { className?: string }) => (
+    <Eye className={className} />
+);
+
+export const UploadIcon = ({ className }: { className?: string }) => (
+    <FileUp className={className} />
+);
+
+export const CloseIcon = ({ className }: { className?: string }) => (
+    <X className={className} />
+);
+

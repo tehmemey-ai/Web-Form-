@@ -26,6 +26,11 @@ export interface DataRequestForm {
   description: string;
   dateRangeStart: string;
   dateRangeEnd: string;
+  otherCategoryReason?: string;
+  supportingDocName?: string;
+  supportingDocSize?: number;
+  supportingDocType?: string;
+  supportingDocUrl?: string;
 }
 
 export interface DataRequest extends DataRequestForm {
