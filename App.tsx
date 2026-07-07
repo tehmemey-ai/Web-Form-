@@ -324,7 +324,7 @@ const App: React.FC = () => {
           <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-8 shadow-xl shadow-blue-200">
             <DashboardIcon className="text-white w-10 h-10" />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-4">DataRequest.ai</h1>
+          <h1 className="text-3xl font-extrabold text-slate-900 mb-4 tracking-tight">InternalDataRequest<span className="text-blue-600">.Portal</span></h1>
           <p className="text-slate-500 mb-10 leading-relaxed">
             Welcome to the internal data requisition portal. Please sign in with your corporate account to continue.
           </p>
@@ -366,7 +366,7 @@ const App: React.FC = () => {
               <div className="w-9 h-9 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-200 group-hover:scale-105 transition-transform">
                 <DashboardIcon className="text-white w-5 h-5" />
               </div>
-              <span className="text-xl font-extrabold text-slate-900 tracking-tight">DataRequest<span className="text-blue-600">.ai</span></span>
+              <span className="text-xl font-extrabold text-slate-900 tracking-tight">InternalDataRequest<span className="text-blue-600">.Portal</span></span>
             </div>
             
             <div className="flex items-center space-x-2">
