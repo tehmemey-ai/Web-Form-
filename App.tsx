@@ -723,12 +723,12 @@ const App: React.FC = () => {
             </div>
 
             {/* Metric Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
               <button 
                 onClick={() => setFilterStatus('ALL')}
                 className={`text-left bg-white p-4 rounded-xl border transition-all ${
                   filterStatus === 'ALL' 
-                    ? 'border-blue-500 ring-2 ring-blue-100 shadow-md scale-[1.02]' 
+                    ? 'border-indigo-500 ring-2 ring-indigo-100 shadow-md scale-[1.02]' 
                     : 'border-slate-100 shadow-sm hover:border-slate-300'
                 }`}
               >
@@ -746,6 +746,19 @@ const App: React.FC = () => {
                 <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1">Pending</p>
                 <p className="text-2xl font-bold text-amber-700">
                   {requests.filter(r => r.status === 'PENDING').length}
+                </p>
+              </button>
+              <button 
+                onClick={() => setFilterStatus('PROCESSING')}
+                className={`text-left bg-blue-50/50 p-4 rounded-xl border transition-all ${
+                  filterStatus === 'PROCESSING' 
+                    ? 'border-blue-500 ring-2 ring-blue-100 shadow-md scale-[1.02]' 
+                    : 'border-blue-100 shadow-sm hover:border-blue-200'
+                }`}
+              >
+                <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">Processing</p>
+                <p className="text-2xl font-bold text-blue-700">
+                  {requests.filter(r => r.status === 'PROCESSING').length}
                 </p>
               </button>
               <button 
