@@ -228,8 +228,16 @@ const App: React.FC = () => {
 
     setIsSubmitting(true);
     try {
+      // Clean undefined values from the payload to prevent Firestore write errors
+      const cleanedData = Object.entries(formData).reduce((acc, [key, val]) => {
+        if (val !== undefined) {
+          acc[key] = val;
+        }
+        return acc;
+      }, {} as Record<string, any>);
+
       await addDoc(collection(db, 'requests'), {
-        ...formData,
+        ...cleanedData,
         uid: user.uid,
         createdAt: serverTimestamp(),
         status: 'PENDING'
