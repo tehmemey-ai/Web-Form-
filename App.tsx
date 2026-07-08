@@ -68,6 +68,14 @@ const App: React.FC = () => {
   const [filterStartDate, setFilterStartDate] = useState('');
   const [filterEndDate, setFilterEndDate] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [expandedRequests, setExpandedRequests] = useState<Record<string, boolean>>({});
+
+  const toggleExpand = (id: string) => {
+    setExpandedRequests(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
 
   // Filter requests client-side (no data is lost, database remains intact!)
   const filteredRequests = requests.filter(req => {
@@ -523,6 +531,7 @@ const App: React.FC = () => {
                     value={formData.description}
                     onChange={handleChange}
                     placeholder="Describe the data you need. Example: Rekap Data Proyek OSS Tahun 2024..."
+                    maxLength={1500}
                     required
                     action={
                         <button
@@ -536,8 +545,14 @@ const App: React.FC = () => {
                         </button>
                     }
                     />
+                    <div className="flex justify-between text-[11px] text-slate-400 font-medium px-1 mt-1">
+                      <span>Deskripsikan detail permohonan data Anda agar mempermudah verifikasi.</span>
+                      <span className={formData.description.length >= 1400 ? 'text-amber-600 font-semibold' : ''}>
+                        {formData.description.length}/1500
+                      </span>
+                    </div>
                      {aiReasoning && (
-                        <div className="text-xs text-indigo-600 bg-indigo-50 p-2 rounded-md flex items-start">
+                        <div className="text-xs text-indigo-600 bg-indigo-50 p-2 rounded-md flex items-start mt-2">
                             <div className="mr-2 mt-0.5"><MagicIcon className="w-3 h-3" /></div>
                             <span><strong>AI Categorized:</strong> {aiReasoning}</span>
                         </div>
@@ -918,9 +933,54 @@ const App: React.FC = () => {
                           </div>
                         </div>
                         
-                        <h3 className="text-lg font-bold text-slate-900 leading-tight mb-2">
-                          {req.description}
+                        {/* Elegant Structured Header based on category */}
+                        <h3 className="text-base md:text-lg font-bold text-slate-900 leading-snug flex items-center gap-2 mb-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+                          <span>
+                            {req.category === 'Other' && req.otherCategoryReason
+                              ? req.otherCategoryReason 
+                              : req.category.replace(/_/g, ' ')}
+                          </span>
                         </h3>
+
+                        {/* Description block styled as an elegant inset panel */}
+                        <div className="bg-slate-50/70 hover:bg-slate-50 border border-slate-100/50 rounded-xl p-4 transition-colors duration-200 mt-2 mb-3.5">
+                          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-1.5 flex items-center gap-1.5">
+                            <FormIcon className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Detail Deskripsi Permohonan</span>
+                          </div>
+                          <div className="text-slate-600 text-sm leading-relaxed font-normal whitespace-pre-wrap break-words">
+                            {req.description.length > 180 && !expandedRequests[req.id] ? (
+                              <>
+                                {req.description.slice(0, 180)}...
+                                <div className="mt-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleExpand(req.id)}
+                                    className="text-blue-600 hover:text-blue-800 font-semibold text-xs hover:underline inline-flex items-center"
+                                  >
+                                    Selengkapnya &darr;
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                {req.description}
+                                {req.description.length > 180 && (
+                                  <div className="mt-2 border-t border-slate-100/50 pt-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpand(req.id)}
+                                      className="text-blue-600 hover:text-blue-800 font-semibold text-xs hover:underline inline-flex items-center"
+                                    >
+                                      Sembunyikan &uarr;
+                                    </button>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
                         
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mt-4">
                           <div className="flex items-center text-xs text-slate-500 bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
