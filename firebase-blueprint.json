@@ -15,7 +15,13 @@
         "dateRangeStart": { "type": "string", "description": "Start date for the requested data." },
         "dateRangeEnd": { "type": "string", "description": "End date for the requested data." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the request was created." },
-        "status": { "type": "string", "enum": ["PENDING", "PROCESSING", "COMPLETED", "REJECTED"], "description": "The current status of the request." }
+        "status": { "type": "string", "enum": ["PENDING", "PROCESSING", "COMPLETED", "REJECTED"], "description": "The current status of the request." },
+        "resultFileName": { "type": "string", "description": "Name of the uploaded result file." },
+        "resultFileUrl": { "type": "string", "description": "Data URL or download link of the result file." },
+        "resultNotes": { "type": "string", "description": "Completion notes or comments for the request result." },
+        "resultDriveUrl": { "type": "string", "description": "Google Drive or cloud storage link for the result." },
+        "resultUploadedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the result was uploaded." },
+        "downloadPin": { "type": "string", "description": "Access PIN required for requesters to download or view the result data." }
       },
       "required": ["fullName", "email", "handphone", "department", "description", "createdAt"]
     }

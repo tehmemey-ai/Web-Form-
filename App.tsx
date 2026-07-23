@@ -8,7 +8,7 @@ import Button from './components/Button';
 import { 
   MagicIcon, SuccessIcon, SendIcon, FormIcon, DashboardIcon, Spinner, 
   LogOutIcon, UserIcon, ClockIcon, DoneIcon, XIcon, DownloadIcon, TrashIcon,
-  PaperclipIcon, EyeIcon, UploadIcon, CloseIcon
+  PaperclipIcon, EyeIcon, UploadIcon, CloseIcon, LockIcon, KeyIcon, ExternalLinkIcon, FileCheckIcon, TagIcon
 } from './components/Icons';
 import { auth, db, signInWithGoogle, logout } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -61,6 +61,7 @@ const App: React.FC = () => {
   const [isRefining, setIsRefining] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [createdRequestId, setCreatedRequestId] = useState<string | null>(null);
   const [aiReasoning, setAiReasoning] = useState<string | null>(null);
 
   // Client-side search and filter states
@@ -77,6 +78,116 @@ const App: React.FC = () => {
     }));
   };
 
+  // Download PIN Protection & Unlocking States
+  const [unlockedDownloads, setUnlockedDownloads] = useState<Record<string, boolean>>({});
+  const [downloadModalReq, setDownloadModalReq] = useState<DataRequest | null>(null);
+  const [inputDownloadPin, setInputDownloadPin] = useState('');
+  const [downloadPinError, setDownloadPinError] = useState<string | null>(null);
+
+  // Upload Result Modal States
+  const [uploadModalReq, setUploadModalReq] = useState<DataRequest | null>(null);
+  const [customDownloadPinInput, setCustomDownloadPinInput] = useState('');
+  const [resultFileName, setResultFileName] = useState('');
+  const [resultFileUrl, setResultFileUrl] = useState('');
+  const [resultDriveUrl, setResultDriveUrl] = useState('');
+  const [resultNotes, setResultNotes] = useState('');
+  const [resultStatus, setResultStatus] = useState<'COMPLETED' | 'PROCESSING'>('COMPLETED');
+  const [isSavingResult, setIsSavingResult] = useState(false);
+  const [resultFileError, setResultFileError] = useState<string | null>(null);
+
+  const handleOpenUploadModal = (req: DataRequest) => {
+    setUploadModalReq(req);
+    
+    // Auto-generate a unique 6-digit PIN if no PIN has been assigned yet
+    const initialPin = req.downloadPin || Math.floor(100000 + Math.random() * 900000).toString();
+    setCustomDownloadPinInput(initialPin);
+
+    setResultFileName(req.resultFileName || '');
+    setResultFileUrl(req.resultFileUrl || '');
+    setResultDriveUrl(req.resultDriveUrl || '');
+    setResultNotes(req.resultNotes || '');
+    setResultStatus(req.status === 'REJECTED' || req.status === 'PENDING' ? 'COMPLETED' : (req.status as 'COMPLETED' | 'PROCESSING'));
+    setResultFileError(null);
+  };
+
+  const handleOpenDownloadModal = (req: DataRequest) => {
+    setDownloadModalReq(req);
+    setInputDownloadPin('');
+    setDownloadPinError(null);
+  };
+
+  const handleVerifyDownloadPin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!downloadModalReq) return;
+
+    const targetPin = downloadModalReq.downloadPin || localStorage.getItem('UPLOAD_RESULT_PASSCODE') || '123456';
+    if (inputDownloadPin.trim() === targetPin.trim()) {
+      setUnlockedDownloads(prev => ({ ...prev, [downloadModalReq.id]: true }));
+      setDownloadModalReq(null);
+    } else {
+      setDownloadPinError('PIN Akses salah! Silakan hubungi Admin / Petugas untuk mengonfirmasi dan mendapatkan PIN Akses yang benar.');
+    }
+  };
+
+  const handleResultFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setResultFileError(null);
+    if (!file) return;
+
+    const MAX_SIZE = 800 * 1024; // 800KB
+    if (file.size > MAX_SIZE) {
+      setResultFileError('File terlalu besar (> 800KB). Untuk file besar, gunakan Tautan Drive / Cloud Storage di bawah.');
+      e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setResultFileName(file.name);
+      setResultFileUrl(reader.result as string);
+    };
+    reader.onerror = () => {
+      setResultFileError('Gagal membaca file. Silakan coba lagi.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveResultFile = () => {
+    setResultFileName('');
+    setResultFileUrl('');
+    setResultFileError(null);
+  };
+
+  const handleSaveResult = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadModalReq) return;
+
+    if (!resultFileName && !resultDriveUrl && !resultNotes.trim()) {
+      setResultFileError('Harap lampirkan file hasil data, tautan drive, atau isi catatan hasil.');
+      return;
+    }
+
+    setIsSavingResult(true);
+    try {
+      const requestRef = doc(db, 'requests', uploadModalReq.id);
+      await updateDoc(requestRef, {
+        status: resultStatus,
+        resultFileName: resultFileName || null,
+        resultFileUrl: resultFileUrl || null,
+        resultDriveUrl: resultDriveUrl.trim() || null,
+        resultNotes: resultNotes.trim() || null,
+        downloadPin: customDownloadPinInput.trim() || '123456',
+        resultUploadedAt: serverTimestamp()
+      });
+
+      setUploadModalReq(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `requests/${uploadModalReq.id}`);
+    } finally {
+      setIsSavingResult(false);
+    }
+  };
+
   // Filter requests client-side (no data is lost, database remains intact!)
   const filteredRequests = requests.filter(req => {
     // 1. Status Filter
@@ -86,12 +197,13 @@ const App: React.FC = () => {
 
     // 2. Search Query Filter
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+      const q = searchQuery.toLowerCase().trim().replace('#', '');
+      const matchId = req.id?.toLowerCase().includes(q) || false;
       const matchName = req.fullName?.toLowerCase().includes(q) || false;
       const matchDesc = req.description?.toLowerCase().includes(q) || false;
       const matchDept = req.department?.toLowerCase().includes(q) || false;
       const matchCat = req.category?.toLowerCase().includes(q) || false;
-      if (!matchName && !matchDesc && !matchDept && !matchCat) {
+      if (!matchId && !matchName && !matchDesc && !matchDept && !matchCat) {
         return false;
       }
     }
@@ -244,12 +356,13 @@ const App: React.FC = () => {
         return acc;
       }, {} as Record<string, any>);
 
-      await addDoc(collection(db, 'requests'), {
+      const docRef = await addDoc(collection(db, 'requests'), {
         ...cleanedData,
         uid: user.uid,
         createdAt: serverTimestamp(),
         status: 'PENDING'
       });
+      setCreatedRequestId(docRef.id);
       setSubmitted(true);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'requests');
@@ -278,6 +391,7 @@ const App: React.FC = () => {
 
   const handleReset = () => {
     setSubmitted(false);
+    setCreatedRequestId(null);
     setFormData({
       fullName: user?.displayName || '',
       email: user?.email || '',
@@ -316,6 +430,10 @@ const App: React.FC = () => {
       'Description': req.description,
       'Start Date': req.dateRangeStart,
       'End Date': req.dateRangeEnd,
+      'Has Result?': (req.resultFileName || req.resultDriveUrl || req.resultNotes) ? 'Yes' : 'No',
+      'Result File Name': req.resultFileName || '',
+      'Result Drive Link': req.resultDriveUrl || '',
+      'Result Notes': req.resultNotes || '',
       'Created At': req.createdAt?.toDate ? req.createdAt.toDate().toLocaleString() : ''
     }));
 
@@ -353,19 +471,60 @@ const App: React.FC = () => {
   }
 
   if (submitted) {
+    const formattedReqId = createdRequestId ? `#${createdRequestId.slice(0, 8).toUpperCase()}` : '';
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
-        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center border border-slate-100">
-          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
-            <SuccessIcon className="w-10 h-10 text-green-600" />
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
+        <div className="bg-white rounded-3xl shadow-xl p-6 sm:p-8 max-w-md w-full text-center border border-slate-100 relative overflow-hidden">
+          <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-emerald-200">
+            <SuccessIcon className="w-8 h-8 text-emerald-600" />
           </div>
-          <h2 className="text-3xl font-bold text-slate-900 mb-2">Request Sent!</h2>
-          <p className="text-slate-600 mb-8">
+          <h2 className="text-2xl font-extrabold text-slate-900 mb-2 tracking-tight">Request Sent!</h2>
+          <p className="text-slate-600 text-xs sm:text-sm mb-5 leading-relaxed">
             Your data request has been successfully submitted. You can track its progress in your dashboard.
           </p>
-          <div className="flex flex-col gap-3">
-            <Button onClick={handleReset} className="w-full">Submit Another Request</Button>
-            <Button onClick={() => { setSubmitted(false); setView('dashboard'); }} variant="outline" className="w-full">Go to Dashboard</Button>
+
+          {/* Request ID Display Box */}
+          {createdRequestId && (
+            <div className="bg-indigo-50/90 border border-indigo-200 rounded-2xl p-4 mb-6 text-left space-y-2 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-800 flex items-center gap-1.5">
+                  <TagIcon className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Your Request ID</span>
+                </span>
+                <span className="text-[10px] font-bold text-amber-900 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200 shadow-2xs animate-pulse">
+                  📸 Save / Screenshot
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 bg-white border border-indigo-200/90 rounded-xl px-3.5 py-2.5">
+                <code className="text-base sm:text-lg font-mono font-black text-indigo-950 tracking-wider select-all">
+                  {formattedReqId}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(formattedReqId);
+                    alert(`Request ID (${formattedReqId}) copied to clipboard!`);
+                  }}
+                  className="text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1.5 rounded-lg border border-indigo-200 transition-all flex-shrink-0"
+                >
+                  Copy ID
+                </button>
+              </div>
+
+              <p className="text-[11px] text-indigo-900/90 leading-relaxed font-normal pt-1">
+                💡 <strong>Important:</strong> Please <strong>Save or Screenshot</strong> your Request ID above. Provide this ID when contacting the Admin to request your access PIN for data download.
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2.5">
+            <Button onClick={() => { setSubmitted(false); setView('dashboard'); }} className="w-full bg-blue-600 hover:bg-blue-700 py-2.5 text-xs sm:text-sm font-bold">
+              Go to Dashboard
+            </Button>
+            <Button onClick={handleReset} variant="outline" className="w-full py-2.5 text-xs sm:text-sm font-semibold border-slate-200 text-slate-700">
+              Submit Another Request
+            </Button>
           </div>
         </div>
       </div>
@@ -800,7 +959,7 @@ const App: React.FC = () => {
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Cari nama, deskripsi, unit kerja, atau kategori..."
+                      placeholder="Cari Request ID, nama, deskripsi, unit kerja, atau kategori..."
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-850 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
                     />
                     {searchQuery && (
@@ -925,6 +1084,10 @@ const App: React.FC = () => {
                     <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
                       <div className="flex-1">
                         <div className="flex flex-wrap items-center gap-2 mb-3">
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1 shadow-2xs" title={`Request ID: ${req.id}`}>
+                            <TagIcon className="w-3 h-3 text-slate-500" />
+                            <span>Request ID: #{req.id.slice(0, 8).toUpperCase()}</span>
+                          </span>
                           <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center ${
                             req.status === 'PENDING' ? 'bg-amber-100 text-amber-700' :
                             req.status === 'PROCESSING' ? 'bg-blue-100 text-blue-700' :
@@ -1045,11 +1208,173 @@ const App: React.FC = () => {
                             </div>
                           )}
                         </div>
+
+                        {/* Hasil Data Section */}
+                        {(req.resultFileName || req.resultFileUrl || req.resultDriveUrl || req.resultNotes) ? (
+                          unlockedDownloads[req.id] ? (
+                            <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-xl p-3.5 mt-3 shadow-2xs animate-in fade-in duration-200">
+                              <div className="flex items-center justify-between gap-2 mb-2">
+                                <div className="flex items-center gap-1.5 text-emerald-800 font-bold text-xs uppercase tracking-wider">
+                                  <FileCheckIcon className="w-4 h-4 text-emerald-600" />
+                                  <span>Hasil Data Terbuka</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  {isAdmin && (
+                                    <button
+                                      onClick={() => handleOpenUploadModal(req)}
+                                      className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 bg-white border border-indigo-200 px-2.5 py-1 rounded-lg shadow-2xs hover:bg-indigo-50 flex items-center gap-1 transition-all"
+                                    >
+                                      <span>Edit Results</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => setUnlockedDownloads(prev => ({ ...prev, [req.id]: false }))}
+                                    className="text-[11px] font-semibold text-slate-600 hover:text-slate-800 bg-white border border-slate-200 px-2.5 py-1 rounded-lg shadow-2xs hover:bg-slate-50 flex items-center gap-1 transition-all"
+                                    title="Kunci kembali hasil data"
+                                  >
+                                    <LockIcon className="w-3 h-3 text-slate-500" />
+                                    <span>Kunci</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {req.resultNotes && (
+                                <p className="text-xs text-emerald-950 font-normal mb-2.5 bg-white/80 p-2.5 rounded-lg border border-emerald-100/90 whitespace-pre-wrap">
+                                  {req.resultNotes}
+                                </p>
+                              )}
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                {req.resultFileUrl && req.resultFileName && (
+                                  <a
+                                    href={req.resultFileUrl}
+                                    download={req.resultFileName}
+                                    className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-2xs transition-all"
+                                  >
+                                    <DownloadIcon className="w-3.5 h-3.5" />
+                                    <span>Unduh File: {req.resultFileName}</span>
+                                  </a>
+                                )}
+
+                                {req.resultDriveUrl && (
+                                  <a
+                                    href={req.resultDriveUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-emerald-800 border border-emerald-300 text-xs font-semibold px-3 py-1.5 rounded-lg shadow-2xs transition-all"
+                                  >
+                                    <ExternalLinkIcon className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span>Buka Tautan Cloud / Drive</span>
+                                  </a>
+                                )}
+                              </div>
+
+                              {isAdmin && (
+                                <div className="mt-2 text-xs font-mono bg-emerald-100/70 border border-emerald-300 text-emerald-950 rounded-lg p-2.5 flex items-center justify-between gap-2 shadow-2xs">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <KeyIcon className="w-4 h-4 text-emerald-700 flex-shrink-0" />
+                                    <span className="truncate">
+                                      <strong className="font-sans font-bold text-emerald-950">PIN Akses (Admin View):</strong>{' '}
+                                      <code className="bg-white px-2 py-0.5 rounded border border-emerald-300 font-bold text-emerald-900 select-all">
+                                        {req.downloadPin || '123456'}
+                                      </code>
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(req.downloadPin || '123456');
+                                      alert(`PIN Akses (${req.downloadPin || '123456'}) berhasil disalin ke clipboard!`);
+                                    }}
+                                    className="text-[10px] font-sans font-bold bg-white hover:bg-emerald-50 text-emerald-900 border border-emerald-300 px-2.5 py-1 rounded-md transition-all flex-shrink-0"
+                                  >
+                                    Salin PIN
+                                  </button>
+                                </div>
+                              )}
+
+                              {req.resultUploadedAt && (
+                                <div className="text-[10px] text-emerald-700/80 mt-2 font-medium">
+                                  Diunggah: {req.resultUploadedAt?.toDate ? req.resultUploadedAt.toDate().toLocaleString('id-ID') : 'Baru saja'}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-3.5 mt-3 shadow-2xs">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-1.5 text-amber-900 font-bold text-xs uppercase tracking-wider">
+                                    <LockIcon className="w-4 h-4 text-amber-600" />
+                                    <span>Hasil Data Siap (Memerlukan PIN Akses)</span>
+                                  </div>
+                                  <p className="text-xs text-amber-900/80 leading-relaxed font-normal">
+                                    Petugas telah mengunggah hasil data. Silakan hubungi Admin terlebih dahulu untuk mengonfirmasi &amp; mendapatkan PIN Akses untuk mengunduh.
+                                  </p>
+
+                                  {/* Admin View PIN Option (jaga-jaga kalau admin lupa PIN) */}
+                                  {isAdmin && (
+                                    <div className="pt-1.5 flex items-center gap-2">
+                                      <span className="text-xs font-mono bg-white border border-amber-300 text-amber-950 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 shadow-2xs">
+                                        <KeyIcon className="w-3.5 h-3.5 text-amber-600" />
+                                        <span>PIN (Admin): <code className="text-indigo-700">{req.downloadPin || '123456'}</code></span>
+                                      </span>
+                                      <button
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(req.downloadPin || '123456');
+                                          alert(`PIN Akses (${req.downloadPin || '123456'}) disalin ke clipboard!`);
+                                        }}
+                                        className="text-[10px] font-bold bg-white hover:bg-amber-100/80 text-amber-900 border border-amber-300 px-2 py-1 rounded-lg transition-all"
+                                      >
+                                        Salin
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  <a
+                                    href={`https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName} (${req.category}).`)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 bg-white hover:bg-amber-100/50 text-amber-900 border border-amber-300 font-semibold text-xs px-3 py-2 rounded-xl transition-all shadow-2xs"
+                                  >
+                                    <span>💬 Japri Admin</span>
+                                  </a>
+                                  <button
+                                    onClick={() => handleOpenDownloadModal(req)}
+                                    className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs px-3.5 py-2 rounded-xl shadow-2xs transition-all"
+                                  >
+                                    <KeyIcon className="w-3.5 h-3.5" />
+                                    <span>Buka &amp; Unduh</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        ) : (
+                          isAdmin && (
+                            <div className="mt-3">
+                              <button
+                                onClick={() => handleOpenUploadModal(req)}
+                                className="inline-flex items-center gap-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-2xs"
+                              >
+                                <UploadIcon className="w-3.5 h-3.5 text-slate-500 hover:text-indigo-600" />
+                                <span>Upload Hasil Data</span>
+                              </button>
+                            </div>
+                          )
+                        )}
                       </div>
 
                       <div className="flex items-center md:items-start justify-end gap-1 mt-2 md:mt-0">
                         {isAdmin && (
                           <div className="flex flex-row md:flex-col gap-1">
+                            <button 
+                              onClick={() => handleOpenUploadModal(req)}
+                              className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-all flex items-center justify-center border border-transparent hover:border-indigo-200"
+                              title="Upload Hasil Data (PIN Protected)"
+                            >
+                              <UploadIcon className="w-5 h-5" />
+                              <span className="sr-only">Upload Result</span>
+                            </button>
                             <button 
                               onClick={() => handleUpdateStatus(req.id, 'PROCESSING')}
                               className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-all flex items-center justify-center border border-transparent hover:border-blue-200"
@@ -1094,6 +1419,294 @@ const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* Download PIN Unlock Modal */}
+      {downloadModalReq && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-md w-full p-6 relative">
+            <button
+              onClick={() => setDownloadModalReq(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
+            >
+              <CloseIcon className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 flex-shrink-0">
+                <LockIcon className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Masukkan PIN Akses Unduh Data</h3>
+                <p className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap mt-0.5">
+                  <span className="font-mono font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">
+                    Request ID: #{downloadModalReq.id.slice(0, 8).toUpperCase()}
+                  </span>
+                  <span>Pemohon: <span className="font-semibold text-slate-800">{downloadModalReq.fullName}</span> ({downloadModalReq.department})</span>
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleVerifyDownloadPin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>PIN Akses Unduh <span className="text-rose-500">*</span></span>
+                  <span className="text-[10px] text-slate-400">Dapatkan dari Admin</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    required
+                    autoFocus
+                    placeholder="Masukkan PIN Akses dari Admin"
+                    value={inputDownloadPin}
+                    onChange={(e) => {
+                      setInputDownloadPin(e.target.value);
+                      setDownloadPinError(null);
+                    }}
+                    className="w-full text-base bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono tracking-wider"
+                  />
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setInputDownloadPin(downloadModalReq.downloadPin || '123456')}
+                      className="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 font-bold text-xs px-3 py-2 rounded-xl flex-shrink-0 transition-all"
+                      title="Isi otomatis dengan PIN Akses milik Admin"
+                    >
+                      Isi PIN (Admin)
+                    </button>
+                  )}
+                </div>
+                {downloadPinError ? (
+                  <p className="text-xs font-semibold text-rose-600 mt-1.5">{downloadPinError}</p>
+                ) : (
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Silakan hubungi Admin untuk konfirmasi &amp; mendapatkan PIN Akses.
+                  </p>
+                )}
+              </div>
+
+              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2">
+                <span className="leading-tight font-medium">Belum miliki PIN Akses? Hubungi admin via WA:</span>
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()} atas nama ${downloadModalReq.fullName} (${downloadModalReq.category}).`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-[11px] px-2.5 py-1.5 rounded-lg flex-shrink-0 transition-all shadow-2xs"
+                >
+                  <span>Japri Admin</span>
+                  <ExternalLinkIcon className="w-3 h-3" />
+                </a>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDownloadModalReq(null)}
+                  className="text-xs py-2 px-3.5"
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="submit"
+                  className="text-xs py-2 px-4 bg-amber-600 hover:bg-amber-700 text-white"
+                >
+                  <KeyIcon className="w-3.5 h-3.5 mr-1.5" />
+                  Buka &amp; Unduh Data
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Hasil Data Modal */}
+      {uploadModalReq && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-lg w-full p-6 relative my-8">
+            <button
+              onClick={() => setUploadModalReq(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
+            >
+              <CloseIcon className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 flex-shrink-0">
+                <LockIcon className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Upload Hasil Data</h3>
+                <p className="text-xs text-slate-500">
+                  Untuk Permohonan: <span className="font-semibold text-slate-800">{uploadModalReq.fullName}</span> ({uploadModalReq.department})
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveResult} className="space-y-4">
+              {/* PIN Akses Unduh for Requester */}
+              <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-3.5 space-y-2">
+                <label className="block text-xs font-bold text-indigo-900 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <LockIcon className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>PIN Akses Unduh Pemohon <span className="text-rose-500">*</span></span>
+                  </span>
+                  <span className="text-[10px] font-normal text-indigo-700">Diberikan ke pemohon saat Japri</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    value={customDownloadPinInput}
+                    onChange={(e) => setCustomDownloadPinInput(e.target.value)}
+                    className="w-full text-sm bg-white border border-indigo-200 rounded-lg px-3 py-2 text-slate-800 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="Contoh: 123456"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCustomDownloadPinInput(Math.floor(100000 + Math.random() * 900000).toString())}
+                    className="inline-flex items-center gap-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-semibold px-2.5 py-2 rounded-lg flex-shrink-0 transition-all"
+                    title="Buat PIN 6 digit acak baru"
+                  >
+                    <MagicIcon className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Acak</span>
+                  </button>
+                  {uploadModalReq.handphone && (
+                    <a
+                      href={`https://wa.me/${uploadModalReq.handphone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Halo Bpk/Ibu ${uploadModalReq.fullName}, permohonan data Anda (${uploadModalReq.category}) telah selesai disiapkan. PIN Akses untuk mengunduh hasil data Anda adalah: *${customDownloadPinInput}*. Silakan masukkan PIN ini pada dashboard permohonan data. Terima kasih!`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg flex-shrink-0 transition-all shadow-2xs"
+                      title="Kirim PIN Akses langsung ke WA Pemohon"
+                    >
+                      <span>WA Pemohon</span>
+                      <ExternalLinkIcon className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {/* Status Update Choice */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Status Permohonan Setelah Upload
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setResultStatus('COMPLETED')}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border flex items-center justify-center gap-2 transition-all ${
+                      resultStatus === 'COMPLETED'
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800 ring-2 ring-emerald-200'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <DoneIcon className="w-4 h-4 text-emerald-600" />
+                    <span>Selesai (COMPLETED)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResultStatus('PROCESSING')}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold border flex items-center justify-center gap-2 transition-all ${
+                      resultStatus === 'PROCESSING'
+                        ? 'bg-blue-50 border-blue-300 text-blue-800 ring-2 ring-blue-200'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <ClockIcon className="w-4 h-4 text-blue-600" />
+                    <span>Proses (PROCESSING)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* File Attachment */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Pilih File Hasil Data (Maks. 800KB)
+                </label>
+                {resultFileName ? (
+                  <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <PaperclipIcon className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-emerald-900 truncate">{resultFileName}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRemoveResultFile}
+                      className="text-xs text-rose-600 hover:text-rose-800 font-semibold ml-2"
+                    >
+                      Hapus
+                    </button>
+                  </div>
+                ) : (
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.csv,.png,.jpg,.jpeg"
+                    onChange={handleResultFileChange}
+                    className="block w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                  />
+                )}
+              </div>
+
+              {/* Drive / Cloud Link */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Tautan Google Drive / Cloud Storage (Opsional)
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://drive.google.com/file/d/..."
+                  value={resultDriveUrl}
+                  onChange={(e) => setResultDriveUrl(e.target.value)}
+                  className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  Gunakan tautan ini jika ukuran file lebih besar dari 800KB atau berupa folder.
+                </p>
+              </div>
+
+              {/* Result Notes */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Catatan / Keterangan Penyelesaian
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Contoh: Data rekapitulasi usaha pariwisata Jakbar tahun 2026 telah diverifikasi dan dilampirkan."
+                  value={resultNotes}
+                  onChange={(e) => setResultNotes(e.target.value)}
+                  className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              {resultFileError && (
+                <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2.5">
+                  ⚠️ {resultFileError}
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setUploadModalReq(null)}
+                  className="text-xs py-2 px-4"
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="submit"
+                  isLoading={isSavingResult}
+                  className="text-xs py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white"
+                >
+                  <UploadIcon className="w-3.5 h-3.5 mr-1.5" />
+                  Simpan & Unggah Hasil Data
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

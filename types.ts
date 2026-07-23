@@ -38,6 +38,12 @@ export interface DataRequest extends DataRequestForm {
   uid: string;
   createdAt: any; // Firestore Timestamp
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'REJECTED';
+  resultFileName?: string;
+  resultFileUrl?: string;
+  resultNotes?: string;
+  resultDriveUrl?: string;
+  resultUploadedAt?: any;
+  downloadPin?: string;
 }
 
 export interface CategorySuggestionResponse {

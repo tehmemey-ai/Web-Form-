@@ -72,8 +72,8 @@ service cloud.firestore {
       // Users can read their own requests, admins can read all
       allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
       
-      // Only admins can update status or other fields
-      allow update: if isAuthenticated() && isAdmin() && isValidRequest(request.resource.data);
+      // Admins and authenticated users can update requests (e.g. status & result data upload)
+      allow update: if isAuthenticated() && isValidRequest(request.resource.data);
       
       // Only admins can delete requests
       allow delete: if isAuthenticated() && isAdmin();
