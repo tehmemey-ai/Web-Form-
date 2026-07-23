@@ -112,7 +112,7 @@ const App: React.FC = () => {
 
   const handleOpenDownloadModal = (req: DataRequest) => {
     setDownloadModalReq(req);
-    setInputDownloadPin('');
+    setInputDownloadPin(isAdmin ? (req.downloadPin || '123456') : '');
     setDownloadPinError(null);
   };
 
@@ -1307,7 +1307,10 @@ const App: React.FC = () => {
                                     <span>Hasil Data Siap (Memerlukan PIN Akses)</span>
                                   </div>
                                   <p className="text-xs text-amber-900/80 leading-relaxed font-normal">
-                                    Petugas telah mengunggah hasil data. Silakan hubungi Admin terlebih dahulu untuk mengonfirmasi &amp; mendapatkan PIN Akses untuk mengunduh.
+                                    {isAdmin 
+                                      ? "Hasil data telah diunggah dan terkunci PIN. Anda dapat memberikan PIN berikut ke Pemohon via WA atau membukanya langsung."
+                                      : "Petugas telah mengunggah hasil data. Silakan hubungi Admin terlebih dahulu untuk mengonfirmasi & mendapatkan PIN Akses untuk mengunduh."
+                                    }
                                   </p>
 
                                   {/* Admin View PIN Option (jaga-jaga kalau admin lupa PIN) */}
@@ -1330,14 +1333,26 @@ const App: React.FC = () => {
                                   )}
                                 </div>
                                 <div className="flex items-center gap-2 flex-shrink-0">
-                                  <a
-                                    href={`https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName} (${req.category}).`)}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 bg-white hover:bg-amber-100/50 text-amber-900 border border-amber-300 font-semibold text-xs px-3 py-2 rounded-xl transition-all shadow-2xs"
-                                  >
-                                    <span>💬 Japri Admin</span>
-                                  </a>
+                                  {isAdmin ? (
+                                    <a
+                                      href={req.handphone ? `https://wa.me/${req.handphone.replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo ${req.fullName}, permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) telah selesai diproses. PIN Akses Anda adalah: ${req.downloadPin || '123456'}.`)}` : `https://wa.me/?text=${encodeURIComponent(`Halo ${req.fullName}, permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) telah selesai diproses. PIN Akses Anda adalah: ${req.downloadPin || '123456'}.`)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 bg-white hover:bg-amber-100/50 text-amber-900 border border-amber-300 font-semibold text-xs px-3 py-2 rounded-xl transition-all shadow-2xs"
+                                      title={req.handphone ? `Kirim PIN ke WA Pemohon (${req.handphone})` : 'Kirim PIN ke WA Pemohon'}
+                                    >
+                                      <span>💬 Japri Pemohon</span>
+                                    </a>
+                                  ) : (
+                                    <a
+                                      href={`https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName} (${req.category}).`)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 bg-white hover:bg-amber-100/50 text-amber-900 border border-amber-300 font-semibold text-xs px-3 py-2 rounded-xl transition-all shadow-2xs"
+                                    >
+                                      <span>💬 Japri Admin</span>
+                                    </a>
+                                  )}
                                   <button
                                     onClick={() => handleOpenDownloadModal(req)}
                                     className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs px-3.5 py-2 rounded-xl shadow-2xs transition-all"
@@ -1450,14 +1465,14 @@ const App: React.FC = () => {
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
                   <span>PIN Akses Unduh <span className="text-rose-500">*</span></span>
-                  <span className="text-[10px] text-slate-400">Dapatkan dari Admin</span>
+                  <span className="text-[10px] text-slate-400">{isAdmin ? 'Mode Admin (PIN Terisi Otomatis)' : 'Dapatkan dari Admin'}</span>
                 </label>
                 <div className="flex gap-2">
                   <input
                     type="password"
                     required
                     autoFocus
-                    placeholder="Masukkan PIN Akses dari Admin"
+                    placeholder={isAdmin ? "PIN Akses (Admin)" : "Masukkan PIN Akses dari Admin"}
                     value={inputDownloadPin}
                     onChange={(e) => {
                       setInputDownloadPin(e.target.value);
@@ -1480,20 +1495,25 @@ const App: React.FC = () => {
                   <p className="text-xs font-semibold text-rose-600 mt-1.5">{downloadPinError}</p>
                 ) : (
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Silakan hubungi Admin untuk konfirmasi &amp; mendapatkan PIN Akses.
+                    {isAdmin ? 'Sebagai Admin, Anda dapat langsung mengunduh/membuka file atau membagikan PIN ke Pemohon.' : 'Silakan hubungi Admin untuk konfirmasi & mendapatkan PIN Akses.'}
                   </p>
                 )}
               </div>
 
               <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-amber-950 flex items-center justify-between gap-2">
-                <span className="leading-tight font-medium">Belum miliki PIN Akses? Hubungi admin via WA:</span>
+                <span className="leading-tight font-medium">
+                  {isAdmin ? 'Ingin kirim PIN Akses ke Pemohon via WA?' : 'Belum miliki PIN Akses? Hubungi admin via WA:'}
+                </span>
                 <a
-                  href={`https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()} atas nama ${downloadModalReq.fullName} (${downloadModalReq.category}).`)}`}
+                  href={isAdmin 
+                    ? (downloadModalReq.handphone ? `https://wa.me/${downloadModalReq.handphone.replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo ${downloadModalReq.fullName}, PIN Akses permohonan data Anda (Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()}) adalah: ${downloadModalReq.downloadPin || '123456'}.`)}` : `https://wa.me/?text=${encodeURIComponent(`Halo ${downloadModalReq.fullName}, PIN Akses permohonan data Anda (Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()}) adalah: ${downloadModalReq.downloadPin || '123456'}.`)}`)
+                    : `https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()} atas nama ${downloadModalReq.fullName} (${downloadModalReq.category}).`)}`
+                  }
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-[11px] px-2.5 py-1.5 rounded-lg flex-shrink-0 transition-all shadow-2xs"
                 >
-                  <span>Japri Admin</span>
+                  <span>{isAdmin ? 'Japri Pemohon' : 'Japri Admin'}</span>
                   <ExternalLinkIcon className="w-3 h-3" />
                 </a>
               </div>
