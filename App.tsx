@@ -95,6 +95,37 @@ const App: React.FC = () => {
   const [isSavingResult, setIsSavingResult] = useState(false);
   const [resultFileError, setResultFileError] = useState<string | null>(null);
 
+  // Reject Request Modal States
+  const [rejectModalReq, setRejectModalReq] = useState<DataRequest | null>(null);
+  const [inputRejectionReason, setInputRejectionReason] = useState('');
+  const [isSavingRejection, setIsSavingRejection] = useState(false);
+
+  const handleOpenRejectModal = (req: DataRequest) => {
+    setRejectModalReq(req);
+    setInputRejectionReason(req.rejectionReason || req.resultNotes || '');
+  };
+
+  const handleSaveRejection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectModalReq) return;
+
+    setIsSavingRejection(true);
+    try {
+      const requestRef = doc(db, 'requests', rejectModalReq.id);
+      const reason = inputRejectionReason.trim() || 'Permohonan ditolak oleh Admin.';
+      await updateDoc(requestRef, {
+        status: 'REJECTED',
+        rejectionReason: reason,
+        resultNotes: reason
+      });
+      setRejectModalReq(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `requests/${rejectModalReq.id}`);
+    } finally {
+      setIsSavingRejection(false);
+    }
+  };
+
   const handleOpenUploadModal = (req: DataRequest) => {
     setUploadModalReq(req);
     
@@ -372,6 +403,13 @@ const App: React.FC = () => {
   };
 
   const handleUpdateStatus = async (requestId: string, newStatus: string) => {
+    if (newStatus === 'REJECTED') {
+      const targetReq = requests.find(r => r.id === requestId);
+      if (targetReq) {
+        handleOpenRejectModal(targetReq);
+        return;
+      }
+    }
     try {
       const requestRef = doc(db, 'requests', requestId);
       await updateDoc(requestRef, { status: newStatus });
@@ -1209,8 +1247,50 @@ const App: React.FC = () => {
                           )}
                         </div>
 
-                        {/* Hasil Data Section */}
-                        {(req.resultFileName || req.resultFileUrl || req.resultDriveUrl || req.resultNotes) ? (
+                        {/* Rejection Status Section or Hasil Data Section */}
+                        {req.status === 'REJECTED' ? (
+                          <div className="bg-rose-50/90 border border-rose-200/90 rounded-xl p-3.5 mt-3 shadow-2xs">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                              <div className="flex items-center gap-1.5 text-rose-800 font-bold text-xs uppercase tracking-wider">
+                                <XIcon className="w-4 h-4 text-rose-600" />
+                                <span>Permohonan Ditolak / Tidak Dapat Diproses</span>
+                              </div>
+                              {isAdmin && (
+                                <button
+                                  onClick={() => handleOpenRejectModal(req)}
+                                  className="text-[11px] font-semibold text-rose-700 hover:text-rose-900 bg-white border border-rose-200 px-2.5 py-1 rounded-lg shadow-2xs hover:bg-rose-50 flex items-center gap-1 transition-all self-start sm:self-auto"
+                                >
+                                  <span>Edit Alasan Penolakan</span>
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="bg-white/90 p-3 rounded-xl border border-rose-100 text-xs text-rose-950 leading-relaxed shadow-2xs">
+                              <div className="font-bold text-[11px] text-rose-900 uppercase tracking-wider mb-1 flex items-center gap-1">
+                                <span>💬 Alasan / Keterangan Penolakan oleh Admin:</span>
+                              </div>
+                              <p className="whitespace-pre-wrap font-medium text-slate-800">
+                                {req.rejectionReason || req.resultNotes || 'Permohonan ini tidak dapat diproses / ditolak oleh Admin. Silakan hubungi Admin melalui tombol WhatsApp di bawah jika memerlukan penjelasan lebih lanjut.'}
+                              </p>
+                            </div>
+
+                            <div className="mt-3 flex items-center justify-between gap-2 pt-2 border-t border-rose-200/60 text-xs">
+                              <span className="text-rose-800/80 text-[11px] font-medium">Ada pertanyaan terkait penolakan?</span>
+                              <a
+                                href={isAdmin
+                                  ? (req.handphone ? `https://wa.me/${req.handphone.replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo ${req.fullName}, mengenai permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) yang ditolak: ${req.rejectionReason || ''}`)}` : `https://wa.me/?text=${encodeURIComponent(`Halo ${req.fullName}, mengenai permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) yang ditolak.`)}`)
+                                  : `https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin menanyakan lebih lanjut mengenai alasan penolakan permohonan data saya dengan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName}.`)}`
+                                }
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-3 py-1.5 rounded-xl transition-all shadow-2xs"
+                              >
+                                <span>{isAdmin ? 'Japri Pemohon' : 'Japri Admin via WA'}</span>
+                                <ExternalLinkIcon className="w-3 h-3" />
+                              </a>
+                            </div>
+                          </div>
+                        ) : (req.resultFileName || req.resultFileUrl || req.resultDriveUrl || req.resultNotes) ? (
                           unlockedDownloads[req.id] ? (
                             <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-xl p-3.5 mt-3 shadow-2xs animate-in fade-in duration-200">
                               <div className="flex items-center justify-between gap-2 mb-2">
@@ -1721,6 +1801,110 @@ const App: React.FC = () => {
                 >
                   <UploadIcon className="w-3.5 h-3.5 mr-1.5" />
                   Simpan & Unggah Hasil Data
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reject Request Modal */}
+      {rejectModalReq && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-lg w-full p-6 relative my-8">
+            <button
+              onClick={() => setRejectModalReq(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
+            >
+              <CloseIcon className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 flex-shrink-0">
+                <XIcon className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Alasan Penolakan Permohonan</h3>
+                <p className="text-xs text-slate-500">
+                  Untuk Permohonan: <span className="font-semibold text-slate-800">{rejectModalReq.fullName}</span> ({rejectModalReq.department})
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveRejection} className="space-y-4">
+              {/* Presets / Templates */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Pilih Template Alasan Cepat (Opsional)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    "Dokumen pendukung / lampiran permohonan tidak lengkap.",
+                    "Data yang diminta berada di luar kewenangan dinas.",
+                    "Rentang periode data yang diminta terlalu luas / tidak spesifik.",
+                    "Data yang diminta bersifat rahasia / terbatas."
+                  ].map((preset, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setInputRejectionReason(preset)}
+                      className="text-[11px] bg-slate-50 hover:bg-rose-50 hover:text-rose-700 text-slate-700 border border-slate-200 hover:border-rose-200 px-2.5 py-1 rounded-lg transition-all text-left"
+                    >
+                      + {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Rejection Reason Textarea */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Keterangan / Alasan Penolakan <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  placeholder="Tuliskan alasan penolakan secara jelas agar dapat dibaca oleh pemohon..."
+                  value={inputRejectionReason}
+                  onChange={(e) => setInputRejectionReason(e.target.value)}
+                  className="w-full text-xs bg-slate-50 border border-slate-300 rounded-xl p-3 text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 font-normal leading-relaxed"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Catatan ini akan langsung ditampilkan di dashboard pemohon.
+                </p>
+              </div>
+
+              {rejectModalReq.handphone && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs flex items-center justify-between gap-2">
+                  <span className="text-emerald-900 font-medium">Kirim penolakan langsung ke WA Pemohon?</span>
+                  <a
+                    href={`https://wa.me/${rejectModalReq.handphone.replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo ${rejectModalReq.fullName}, mohon maaf permohonan data Anda (Request ID: #${rejectModalReq.id.slice(0, 8).toUpperCase()}) belum dapat diproses / ditolak dengan alasan: ${inputRejectionReason || '-'}. Terima kasih!`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] px-2.5 py-1.5 rounded-lg flex-shrink-0 transition-all shadow-2xs"
+                  >
+                    <span>WA Pemohon</span>
+                    <ExternalLinkIcon className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setRejectModalReq(null)}
+                  className="text-xs py-2 px-4"
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="submit"
+                  isLoading={isSavingRejection}
+                  className="text-xs py-2 px-4 bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                >
+                  <XIcon className="w-3.5 h-3.5 mr-1.5" />
+                  Simpan & Set Ditolak
                 </Button>
               </div>
             </form>

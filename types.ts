@@ -44,6 +44,7 @@ export interface DataRequest extends DataRequestForm {
   resultDriveUrl?: string;
   resultUploadedAt?: any;
   downloadPin?: string;
+  rejectionReason?: string;
 }
 
 export interface CategorySuggestionResponse {
