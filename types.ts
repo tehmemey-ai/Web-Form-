@@ -52,3 +52,12 @@ export interface CategorySuggestionResponse {
   confidence: number;
   reasoning: string;
 }
+
+export interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+  enabled: boolean;
+  topicId?: string;
+  updatedAt?: any;
+  updatedBy?: string;
+}

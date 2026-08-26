@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { RequestCategory, UrgencyLevel, DataRequestForm, DataRequest } from './types';
+import { RequestCategory, UrgencyLevel, DataRequestForm, DataRequest, TelegramConfig } from './types';
 import { refineDescription, suggestCategory } from './services/geminiService';
+import { sendTelegramMessage, formatNewRequestTelegramMessage } from './services/telegramService';
+import { TelegramSettingsModal } from './components/TelegramSettingsModal';
 import Input from './components/Input';
 import Select from './components/Select';
 import TextArea from './components/TextArea';
@@ -8,14 +10,15 @@ import Button from './components/Button';
 import { 
   MagicIcon, SuccessIcon, SendIcon, FormIcon, DashboardIcon, Spinner, 
   LogOutIcon, UserIcon, ClockIcon, DoneIcon, XIcon, DownloadIcon, TrashIcon,
-  PaperclipIcon, EyeIcon, UploadIcon, CloseIcon, LockIcon, KeyIcon, ExternalLinkIcon, FileCheckIcon, TagIcon
+  PaperclipIcon, EyeIcon, UploadIcon, CloseIcon, LockIcon, KeyIcon, ExternalLinkIcon, 
+  FileCheckIcon, TagIcon, BellIcon, SettingsIcon
 } from './components/Icons';
 import { auth, db, signInWithGoogle, logout } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import * as XLSX from 'xlsx';
 import { 
   collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, 
-  where, updateDoc, doc, deleteDoc, getDocFromServer 
+  where, updateDoc, doc, deleteDoc, setDoc, getDocFromServer 
 } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from './lib/firestore-utils';
 
@@ -99,6 +102,57 @@ const App: React.FC = () => {
   const [rejectModalReq, setRejectModalReq] = useState<DataRequest | null>(null);
   const [inputRejectionReason, setInputRejectionReason] = useState('');
   const [isSavingRejection, setIsSavingRejection] = useState(false);
+
+  // Telegram Notification Settings States
+  const [telegramConfig, setTelegramConfig] = useState<TelegramConfig>(() => {
+    try {
+      const saved = localStorage.getItem('telegram_config');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      // ignore
+    }
+    return { botToken: '', chatId: '', enabled: false };
+  });
+  const [isTelegramModalOpen, setIsTelegramModalOpen] = useState(false);
+
+  // Listen to Telegram Settings from Firestore
+  useEffect(() => {
+    if (!user) return;
+    const unsub = onSnapshot(doc(db, 'settings', 'telegram'), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as TelegramConfig;
+        setTelegramConfig(data);
+        try {
+          localStorage.setItem('telegram_config', JSON.stringify(data));
+        } catch (e) {}
+      }
+    }, (error) => {
+      console.warn('Telegram settings read notice:', error);
+    });
+
+    return () => unsub();
+  }, [user]);
+
+  const handleSaveTelegramConfig = async (newConfig: TelegramConfig) => {
+    const cleanData = {
+      botToken: newConfig.botToken || '',
+      chatId: newConfig.chatId || '',
+      topicId: newConfig.topicId || '',
+      enabled: Boolean(newConfig.enabled),
+      updatedAt: serverTimestamp(),
+      updatedBy: user?.email || 'admin'
+    };
+
+    try {
+      await setDoc(doc(db, 'settings', 'telegram'), cleanData, { merge: true });
+      setTelegramConfig(newConfig);
+      try {
+        localStorage.setItem('telegram_config', JSON.stringify(newConfig));
+      } catch (e) {}
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'settings/telegram');
+    }
+  };
 
   const handleOpenRejectModal = (req: DataRequest) => {
     setRejectModalReq(req);
@@ -395,6 +449,43 @@ const App: React.FC = () => {
       });
       setCreatedRequestId(docRef.id);
       setSubmitted(true);
+
+      // Trigger automatic Telegram notification if enabled
+      if (telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId) {
+        try {
+          const telegramMessage = formatNewRequestTelegramMessage({
+            id: docRef.id,
+            fullName: formData.fullName,
+            email: formData.email,
+            handphone: formData.handphone,
+            department: formData.department,
+            category: formData.category,
+            urgency: formData.urgency,
+            description: formData.description,
+            dateRangeStart: formData.dateRangeStart,
+            dateRangeEnd: formData.dateRangeEnd,
+            otherCategoryReason: formData.otherCategoryReason,
+            supportingDocName: formData.supportingDocName
+          });
+
+          sendTelegramMessage(
+            telegramConfig.botToken,
+            telegramConfig.chatId,
+            telegramMessage,
+            telegramConfig.topicId
+          ).then(res => {
+            if (res.success) {
+              console.log('Telegram notification sent successfully.');
+            } else {
+              console.warn('Telegram notification could not be sent:', res.error);
+            }
+          }).catch(err => {
+            console.warn('Telegram notification network error:', err);
+          });
+        } catch (tgErr) {
+          console.warn('Error constructing Telegram notification:', tgErr);
+        }
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'requests');
     } finally {
@@ -899,22 +990,42 @@ const App: React.FC = () => {
                 <h2 className="text-2xl font-bold text-slate-900">Request Dashboard</h2>
                 <p className="text-slate-500 text-sm">Monitor and manage all data requisition tasks</p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
                 {requests.length > 0 && (
                   <Button 
                     onClick={handleExportExcel} 
                     variant="outline" 
-                    className="text-xs py-2 px-4 h-auto shadow-sm border-slate-200"
+                    className="text-xs py-2 px-3.5 h-auto shadow-sm border-slate-200"
                   >
-                    <DownloadIcon className="w-4 h-4 mr-2 text-slate-500" />
+                    <DownloadIcon className="w-4 h-4 mr-1.5 text-slate-500" />
                     Export to Excel
                   </Button>
                 )}
                 {isAdmin && (
-                  <div className="text-xs font-medium text-blue-600 bg-blue-50 px-3 py-2 rounded-lg border border-blue-100 flex items-center">
-                    <UserIcon className="w-3.5 h-3.5 mr-1.5" />
-                    Admin View
-                  </div>
+                  <>
+                    <button
+                      onClick={() => setIsTelegramModalOpen(true)}
+                      className="inline-flex items-center gap-2 text-xs font-bold py-2 px-3.5 rounded-xl border border-sky-200 bg-sky-50/90 hover:bg-sky-100 text-sky-800 transition-all shadow-2xs hover:shadow-xs group cursor-pointer"
+                      title="Atur bot notifikasi Telegram otomatis"
+                    >
+                      <div className="relative flex items-center justify-center">
+                        <span className={`w-2 h-2 rounded-full ${telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                      </div>
+                      <SendIcon className="w-3.5 h-3.5 text-sky-600 group-hover:scale-110 transition-transform" />
+                      <span>Notifikasi Telegram</span>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
+                        telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-200 text-slate-600'
+                      }`}>
+                        {telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId ? 'AKTIF' : 'OFF'}
+                      </span>
+                    </button>
+                    <div className="text-xs font-medium text-blue-600 bg-blue-50 px-3 py-2 rounded-xl border border-blue-100 flex items-center">
+                      <UserIcon className="w-3.5 h-3.5 mr-1.5" />
+                      Admin View
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -1911,6 +2022,15 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Telegram Notification Settings Modal */}
+      <TelegramSettingsModal
+        isOpen={isTelegramModalOpen}
+        onClose={() => setIsTelegramModalOpen(false)}
+        config={telegramConfig}
+        onSave={handleSaveTelegramConfig}
+        adminName={user.displayName || user.email || 'Admin'}
+      />
     </div>
   );
 };

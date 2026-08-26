@@ -24,12 +24,29 @@
         "downloadPin": { "type": "string", "description": "Access PIN required for requesters to download or view the result data." }
       },
       "required": ["fullName", "email", "handphone", "department", "description", "createdAt"]
+    },
+    "TelegramSettings": {
+      "title": "Telegram Notification Settings",
+      "description": "Configuration for Telegram bot notifications.",
+      "type": "object",
+      "properties": {
+        "botToken": { "type": "string", "description": "Telegram Bot Token from BotFather." },
+        "chatId": { "type": "string", "description": "Target Chat ID or Group ID." },
+        "enabled": { "type": "boolean", "description": "Whether Telegram notifications are active." },
+        "topicId": { "type": "string", "description": "Optional Message Thread ID for forum topics." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Timestamp when settings were updated." },
+        "updatedBy": { "type": "string", "description": "Email of admin who updated the settings." }
+      }
     }
   },
   "firestore": {
     "requests": {
       "schema": "DataRequest",
       "description": "Collection of data requests submitted by users."
+    },
+    "settings": {
+      "schema": "TelegramSettings",
+      "description": "Application settings including Telegram notification configuration."
     }
   }
 }

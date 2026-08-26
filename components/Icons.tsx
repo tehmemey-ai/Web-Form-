@@ -1,5 +1,10 @@
 import React from 'react';
-import { Loader2, Wand2, CheckCircle2, AlertCircle, Send, FileText, LayoutDashboard, LogOut, User, Clock, CheckCircle, XCircle, Download, Trash2, Paperclip, Eye, FileUp, X, Lock, Key, ExternalLink, FileCheck, Tag } from 'lucide-react';
+import { 
+  Loader2, Wand2, CheckCircle2, AlertCircle, Send, FileText, LayoutDashboard, 
+  LogOut, User, Clock, CheckCircle, XCircle, Download, Trash2, Paperclip, 
+  Eye, FileUp, X, Lock, Key, ExternalLink, FileCheck, Tag, Bell, Settings,
+  MessageSquare, Info, Check, Radio, HelpCircle
+} from 'lucide-react';
 
 export const Spinner = ({ className }: { className?: string }) => (
   <Loader2 className={`animate-spin ${className}`} />
@@ -22,75 +27,103 @@ export const SendIcon = ({ className }: { className?: string }) => (
 );
 
 export const FormIcon = ({ className }: { className?: string }) => (
-    <FileText className={className} />
+  <FileText className={className} />
 );
 
 export const DashboardIcon = ({ className }: { className?: string }) => (
-    <LayoutDashboard className={className} />
+  <LayoutDashboard className={className} />
 );
 
 export const LogOutIcon = ({ className }: { className?: string }) => (
-    <LogOut className={className} />
+  <LogOut className={className} />
 );
 
 export const UserIcon = ({ className }: { className?: string }) => (
-    <User className={className} />
+  <User className={className} />
 );
 
 export const ClockIcon = ({ className }: { className?: string }) => (
-    <Clock className={className} />
+  <Clock className={className} />
 );
 
 export const DoneIcon = ({ className }: { className?: string }) => (
-    <CheckCircle className={className} />
+  <CheckCircle className={className} />
 );
 
 export const XIcon = ({ className }: { className?: string }) => (
-    <XCircle className={className} />
+  <XCircle className={className} />
 );
 
 export const DownloadIcon = ({ className }: { className?: string }) => (
-    <Download className={className} />
+  <Download className={className} />
 );
 
 export const TrashIcon = ({ className }: { className?: string }) => (
-    <Trash2 className={className} />
+  <Trash2 className={className} />
 );
 
 export const PaperclipIcon = ({ className }: { className?: string }) => (
-    <Paperclip className={className} />
+  <Paperclip className={className} />
 );
 
 export const EyeIcon = ({ className }: { className?: string }) => (
-    <Eye className={className} />
+  <Eye className={className} />
 );
 
 export const UploadIcon = ({ className }: { className?: string }) => (
-    <FileUp className={className} />
+  <FileUp className={className} />
 );
 
 export const CloseIcon = ({ className }: { className?: string }) => (
-    <X className={className} />
+  <X className={className} />
 );
 
 export const LockIcon = ({ className }: { className?: string }) => (
-    <Lock className={className} />
+  <Lock className={className} />
 );
 
 export const KeyIcon = ({ className }: { className?: string }) => (
-    <Key className={className} />
+  <Key className={className} />
 );
 
 export const ExternalLinkIcon = ({ className }: { className?: string }) => (
-    <ExternalLink className={className} />
+  <ExternalLink className={className} />
 );
 
 export const FileCheckIcon = ({ className }: { className?: string }) => (
-    <FileCheck className={className} />
+  <FileCheck className={className} />
 );
 
 export const TagIcon = ({ className }: { className?: string }) => (
-    <Tag className={className} />
+  <Tag className={className} />
+);
+
+export const BellIcon = ({ className }: { className?: string }) => (
+  <Bell className={className} />
+);
+
+export const SettingsIcon = ({ className }: { className?: string }) => (
+  <Settings className={className} />
+);
+
+export const MessageSquareIcon = ({ className }: { className?: string }) => (
+  <MessageSquare className={className} />
+);
+
+export const InfoIcon = ({ className }: { className?: string }) => (
+  <Info className={className} />
+);
+
+export const CheckIcon = ({ className }: { className?: string }) => (
+  <Check className={className} />
+);
+
+export const RadioIcon = ({ className }: { className?: string }) => (
+  <Radio className={className} />
+);
+
+export const HelpCircleIcon = ({ className }: { className?: string }) => (
+  <HelpCircle className={className} />
 );
 
 
