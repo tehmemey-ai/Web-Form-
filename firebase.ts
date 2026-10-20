@@ -7,6 +7,8 @@ import firebaseConfig from './firebase-applet-config.json';
 
 // Initialize Firebase SDK safely
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+
+// Initialize Firestore for the specified database
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();

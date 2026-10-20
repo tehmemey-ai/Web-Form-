@@ -22,6 +22,73 @@ import {
 } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from './lib/firestore-utils';
 
+export const NON_PTSP_DUMMY_NAMES = [
+  'Maya Anggraini, S.Psi',
+  'Ahmad Fauzi, M.Kom',
+  'Rahmat Hidayat, M.Si',
+  'Dr. Ir. Budi Santoso, M.Sc',
+  'Siti Nurhaliza, S.Sos',
+  'Dewi Lestari, S.H.',
+  'Hendro Prasetyo, S.E.',
+  'Rizky Ramadhan, S.IP'
+];
+
+export const isNonPtsDummy = (item: any): boolean => {
+  if (!item) return false;
+  if (typeof item.id === 'string' && item.id.startsWith('req-master-')) return true;
+  if (NON_PTSP_DUMMY_NAMES.includes(item.fullName)) return true;
+  if (item.email === 'ahmad.fauzi@kemen.go.id' || 
+      item.email === 'maya.anggraini@kemen.go.id' || 
+      item.email === 'siti.nurhaliza@kemen.go.id' || 
+      item.email === 'dewi.lestari@kemen.go.id' || 
+      item.email === 'rizky.ramadhan@kemen.go.id') {
+    return true;
+  }
+  return false;
+};
+
+export const getSafeDate = (val: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val.toDate === 'function') {
+    try {
+      const d = val.toDate();
+      if (d instanceof Date && !isNaN(d.getTime())) return d;
+    } catch (e) {}
+  }
+  if (typeof val.toMillis === 'function') {
+    try {
+      const ms = val.toMillis();
+      if (typeof ms === 'number' && !isNaN(ms)) return new Date(ms);
+    } catch (e) {}
+  }
+  if (typeof val === 'number') {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (val.seconds) {
+    const d = new Date(val.seconds * 1000 + (val.nanoseconds ? val.nanoseconds / 1000000 : 0));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof val === 'string') {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+};
+
+export const formatSafeDateTime = (val: any, fallback = 'Baru saja'): string => {
+  const d = getSafeDate(val);
+  if (!d) return fallback;
+  return d.toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
 const ADMIN_EMAIL = 'tehmemey@gmail.com';
 
 const App: React.FC = () => {
@@ -47,7 +114,28 @@ const App: React.FC = () => {
     supportingDocUrl: ''
   });
 
-  const [requests, setRequests] = useState<DataRequest[]>([]);
+  const [requests, setRequests] = useState<DataRequest[]>(() => {
+    try {
+      const saved = localStorage.getItem('PORTAL_CACHED_REQUESTS');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const clean = parsed.filter(item => !isNonPtsDummy(item));
+          if (clean.length > 0) {
+            return clean;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading cached requests:', e);
+    }
+    try {
+      localStorage.removeItem('PORTAL_CACHED_REQUESTS');
+    } catch (e) {}
+    return [];
+  });
+  const [restoreSuccessMsg, setRestoreSuccessMsg] = useState<string | null>(null);
+  const [isQuotaLimited, setIsQuotaLimited] = useState<boolean>(false);
   const [isRefining, setIsRefining] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -87,7 +175,6 @@ const App: React.FC = () => {
   const [saveResultSuccess, setSaveResultSuccess] = useState<boolean>(false);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
-  const [quotaError, setQuotaError] = useState<string | null>(null);
 
   // Reject Request Modal States
   const [rejectModalReq, setRejectModalReq] = useState<DataRequest | null>(null);
@@ -547,8 +634,8 @@ const App: React.FC = () => {
     }
 
     // 3. Date Filter (createdAt)
-    if (req.createdAt) {
-      const reqDate = req.createdAt.toDate ? req.createdAt.toDate() : new Date();
+    const reqDate = getSafeDate(req.createdAt);
+    if (reqDate) {
       const reqDateStr = reqDate.toISOString().split('T')[0]; // YYYY-MM-DD
 
       if (filterStartDate && reqDateStr < filterStartDate) {
@@ -557,10 +644,8 @@ const App: React.FC = () => {
       if (filterEndDate && reqDateStr > filterEndDate) {
         return false;
       }
-    } else {
-      if (filterStartDate || filterEndDate) {
-        return false;
-      }
+    } else if (filterStartDate || filterEndDate) {
+      return false;
     }
 
     return true;
@@ -571,7 +656,8 @@ const App: React.FC = () => {
       setUser(currentUser);
       setIsAuthLoading(false);
       if (currentUser) {
-        setIsAdmin(currentUser.email === ADMIN_EMAIL);
+        const userEmail = (currentUser.email || '').toLowerCase().trim();
+        setIsAdmin(userEmail === ADMIN_EMAIL.toLowerCase().trim());
         setFormData(prev => ({
           ...prev,
           fullName: currentUser.displayName || '',
@@ -586,45 +672,63 @@ const App: React.FC = () => {
     if (!user) return;
 
     const requestsRef = collection(db, 'requests');
-    let q;
-    if (user.email === ADMIN_EMAIL) {
-      q = query(requestsRef, orderBy('createdAt', 'desc'));
-    } else {
-      q = query(requestsRef, where('uid', '==', user.uid), orderBy('createdAt', 'desc'));
-    }
+    const userEmail = (user.email || '').toLowerCase().trim();
+    const isCurrentAdmin = userEmail === ADMIN_EMAIL.toLowerCase().trim();
+
+    // Query collection directly without compound orderBy to prevent index errors
+    const q = isCurrentAdmin
+      ? requestsRef
+      : query(requestsRef, where('uid', '==', user.uid));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      setIsQuotaLimited(false);
       const fetchedRequests = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as DataRequest[];
-      setRequests(fetchedRequests);
-      setQuotaError(null);
-      try {
-        localStorage.setItem(`cached_requests_${user.uid}`, JSON.stringify(fetchedRequests));
-      } catch {
-        // Ignore storage errors
-      }
-    }, (error) => {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const isQuota = errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('resource-exhausted');
-      if (isQuota) {
-        setQuotaError(errMsg);
-        try {
-          const cached = localStorage.getItem(`cached_requests_${user.uid}`);
-          if (cached) {
-            setRequests(JSON.parse(cached));
+
+      // Detect and auto-clean any non-PTSP dummy docs that might have been synced previously
+      if (isCurrentAdmin) {
+        snapshot.docs.forEach(async (d) => {
+          const data = d.data();
+          if (isNonPtsDummy({ id: d.id, ...data })) {
+            try {
+              await deleteDoc(doc(db, 'requests', d.id));
+            } catch (err) {}
           }
-        } catch {
-          // Ignore parse errors
-        }
-      } else {
-        try {
-          handleFirestoreError(error, OperationType.LIST, 'requests');
-        } catch {
-          // Handled permission error
-        }
+        });
       }
+
+      // Strictly retain only genuine PTSP requests
+      const genuineRequests = fetchedRequests.filter(item => !isNonPtsDummy(item));
+
+      // Client-side sort by createdAt descending safely
+      genuineRequests.sort((a, b) => {
+        const timeA = getSafeDate(a.createdAt)?.getTime() || 0;
+        const timeB = getSafeDate(b.createdAt)?.getTime() || 0;
+        return timeB - timeA;
+      });
+
+      setRequests(genuineRequests);
+      try {
+        localStorage.setItem('PORTAL_CACHED_REQUESTS', JSON.stringify(genuineRequests));
+      } catch (e) {}
+    }, (error) => {
+      console.warn('Firestore snapshot error:', error);
+      handleFirestoreError(error, OperationType.LIST, 'requests');
+      const errStr = error instanceof Error ? error.message : String(error);
+      if (errStr.toLowerCase().includes('quota') || errStr.toLowerCase().includes('exceeded')) {
+        setIsQuotaLimited(true);
+      }
+      try {
+        const saved = localStorage.getItem('PORTAL_CACHED_REQUESTS');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setRequests(prev => (prev.length === 0 ? parsed : prev));
+          }
+        }
+      } catch (e) {}
     });
 
     return () => unsubscribe();
@@ -879,6 +983,46 @@ const App: React.FC = () => {
     XLSX.writeFile(workbook, `Data_Requests_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  const handleExportJsonBackup = () => {
+    const targets = requests.length > 0 ? requests : filteredRequests;
+    if (targets.length === 0) {
+      alert('Belum ada data untuk dicadangkan.');
+      return;
+    }
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(targets, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `Cadangan_Permohonan_Data_${new Date().toISOString().split('T')[0]}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
+  const handleImportJsonBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string);
+        if (Array.isArray(imported) && imported.length > 0) {
+          setRequests(imported);
+          try {
+            localStorage.setItem('PORTAL_CACHED_REQUESTS', JSON.stringify(imported));
+          } catch (err) {}
+          setRestoreSuccessMsg(`Berhasil memulihkan ${imported.length} data permohonan dari file cadangan!`);
+          setTimeout(() => setRestoreSuccessMsg(null), 6000);
+        } else {
+          alert('Format file JSON tidak sesuai atau data kosong.');
+        }
+      } catch (err) {
+        alert('Gagal memproses file JSON cadangan.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   if (isAuthLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -1028,30 +1172,15 @@ const App: React.FC = () => {
         </div>
       </nav>
 
-      {/* Quota Exceeded Alert Banner */}
-      {quotaError && (
-        <div className="bg-amber-500/10 border-b border-amber-300 px-4 py-3 sm:px-6">
-          <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <span className="text-xl">⚠️</span>
-              <div>
-                <h4 className="text-sm font-bold text-amber-900">
-                  Batas Kuota Harian Firestore Tercapai (Daily Read Quota Exceeded)
-                </h4>
-                <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
-                  Batas unit pembacaan harian gratis (free daily read units) Firestore untuk project ini telah mencapai kuota maksimal hari ini. Kuota akan otomatis di-reset besok. Anda juga dapat meng-upgrade database melalui Firebase Console.
-                </p>
-              </div>
+      {isQuotaLimited && (
+        <div className="bg-sky-50/90 border-b border-sky-200 px-4 py-2.5 sm:px-6">
+          <div className="max-w-6xl mx-auto flex items-center justify-between text-xs sm:text-sm text-sky-900">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-sky-500 animate-pulse shrink-0" />
+              <span>
+                <strong>Mode Cache Aktif:</strong> Kuota baca harian Firestore sandbox (50.000 pembacaan/hari) sedang mencapai batas maksimal Google Cloud. Seluruh data Anda aman tersimpan dan saat ini ditampilkan dari memori lokal (IndexedDB & Cache). Kuota akan di-reset otomatis pada pukul 14:00 WIB / 00:00 PST.
+              </span>
             </div>
-            <a
-              href="https://console.firebase.google.com/project/gen-lang-client-0195462066/firestore/databases/ai-studio-664224fd-2648-4b95-9fab-6c119960f71a/data?openUpgradeDialog=true"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shadow-2xs whitespace-nowrap self-end sm:self-center"
-            >
-              <span>Upgrade di Firebase Console</span>
-              <ExternalLinkIcon className="w-3.5 h-3.5" />
-            </a>
           </div>
         </div>
       )}
@@ -1325,16 +1454,34 @@ const App: React.FC = () => {
                 <h2 className="text-2xl font-bold text-slate-900">Request Dashboard</h2>
                 <p className="text-slate-500 text-sm">Monitor and manage all data requisition tasks</p>
               </div>
-              <div className="flex flex-wrap items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <label 
+                  className="cursor-pointer inline-flex items-center gap-1.5 text-xs font-semibold py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition-all shadow-xs"
+                  title="Pulihkan data dari file cadangan JSON"
+                >
+                  <UploadIcon className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Impor JSON</span>
+                  <input type="file" accept=".json" onChange={handleImportJsonBackup} className="hidden" />
+                </label>
                 {requests.length > 0 && (
-                  <Button 
-                    onClick={handleExportExcel} 
-                    variant="outline" 
-                    className="text-xs py-2 px-3.5 h-auto shadow-sm border-slate-200"
-                  >
-                    <DownloadIcon className="w-4 h-4 mr-1.5 text-slate-500" />
-                    Export to Excel
-                  </Button>
+                  <>
+                    <button 
+                      onClick={handleExportJsonBackup} 
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition-all shadow-xs cursor-pointer"
+                      title="Simpan cadangan seluruh data ke file JSON"
+                    >
+                      <DownloadIcon className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Cadangkan</span>
+                    </button>
+                    <Button 
+                      onClick={handleExportExcel} 
+                      variant="outline" 
+                      className="text-xs py-2 px-3 h-auto shadow-xs border-slate-200"
+                    >
+                      <DownloadIcon className="w-3.5 h-3.5 mr-1 text-slate-500" />
+                      Excel
+                    </Button>
+                  </>
                 )}
                 {isAdmin && (
                   <>
@@ -1347,7 +1494,7 @@ const App: React.FC = () => {
                         <span className={`w-2 h-2 rounded-full ${telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                       </div>
                       <SendIcon className="w-3.5 h-3.5 text-sky-600 group-hover:scale-110 transition-transform" />
-                      <span>Notifikasi Telegram</span>
+                      <span>Telegram</span>
                       <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
                         telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId
                           ? 'bg-emerald-100 text-emerald-800'
@@ -1364,6 +1511,16 @@ const App: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {restoreSuccessMsg && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 px-4 py-3 rounded-xl flex items-center justify-between text-xs sm:text-sm animate-in fade-in duration-200">
+                <div className="flex items-center gap-2">
+                  <SuccessIcon className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <span>{restoreSuccessMsg}</span>
+                </div>
+                <button onClick={() => setRestoreSuccessMsg(null)} className="text-emerald-700 hover:text-emerald-900 font-bold ml-4">✕</button>
+              </div>
+            )}
 
             {/* Metric Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
@@ -1526,15 +1683,25 @@ const App: React.FC = () => {
             </div>
 
             {requests.length === 0 ? (
-              <div className="bg-white rounded-2xl p-12 text-center border border-slate-200">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <ClockIcon className="w-8 h-8 text-slate-400" />
+              <div className="bg-white rounded-2xl p-12 text-center border border-slate-200 py-16 shadow-xs">
+                <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-slate-400">
+                  <DashboardIcon className="w-8 h-8 text-slate-400" />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-1">No requests found</h3>
-                <p className="text-slate-500">You haven't submitted any data requests yet.</p>
-                <Button onClick={() => setView('form')} variant="outline" className="mt-6">
-                  Create New Request
-                </Button>
+                <h3 className="text-xl font-bold text-slate-900 mb-2">Belum Ada Permohonan Data</h3>
+                <p className="text-slate-500 max-w-md mx-auto text-sm mb-6 leading-relaxed">
+                  Permohonan data yang diajukan akan otomatis tercatat dan tersimpan di database Anda secara realtime.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Button onClick={() => setView('form')}>
+                    <FormIcon className="w-4 h-4 mr-2" />
+                    + Buat Permohonan Baru
+                  </Button>
+                  <label className="cursor-pointer inline-flex items-center gap-2 text-xs font-semibold py-2.5 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 transition-all shadow-xs">
+                    <UploadIcon className="w-4 h-4 text-slate-500" />
+                    <span>Unggah File Cadangan (.json)</span>
+                    <input type="file" accept=".json" onChange={handleImportJsonBackup} className="hidden" />
+                  </label>
+                </div>
               </div>
             ) : filteredRequests.length === 0 ? (
               <div className="bg-white rounded-2xl p-12 text-center border border-slate-200 py-16">
@@ -1589,7 +1756,7 @@ const App: React.FC = () => {
                           </span>
                           <div className="flex items-center text-[11px] text-slate-400 font-medium">
                             <ClockIcon className="w-3 h-3 mr-1" />
-                            {req.createdAt?.toDate ? req.createdAt.toDate().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                            {formatSafeDateTime(req.createdAt)}
                           </div>
                         </div>
                         
@@ -1881,7 +2048,7 @@ const App: React.FC = () => {
 
                               {req.resultUploadedAt && (
                                 <div className="text-[10px] text-emerald-700/80 mt-2 font-medium">
-                                  Diunggah: {req.resultUploadedAt?.toDate ? req.resultUploadedAt.toDate().toLocaleString('id-ID') : 'Baru saja'}
+                                  Diunggah: {formatSafeDateTime(req.resultUploadedAt)}
                                 </div>
                               )}
                             </div>

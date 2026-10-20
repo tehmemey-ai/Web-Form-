@@ -42,7 +42,7 @@ service cloud.firestore {
     
     function isAdmin() {
       return isAuthenticated() && 
-         (request.auth.token.email == "tehmemey@gmail.com");
+         (request.auth.token.email.matches('(?i)^tehmemey@gmail[.]com$'));
     }
 
     function isValidEmail(email) {
