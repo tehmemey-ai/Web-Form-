@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RequestCategory, UrgencyLevel, DataRequestForm, DataRequest, TelegramConfig } from './types';
+import { RequestCategory, UrgencyLevel, DataRequestForm, DataRequest, TelegramConfig, ResultFileInfo } from './types';
 import { refineDescription, suggestCategory } from './services/geminiService';
 import { sendTelegramMessage, formatNewRequestTelegramMessage } from './services/telegramService';
 import { TelegramSettingsModal } from './components/TelegramSettingsModal';
@@ -18,7 +18,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import * as XLSX from 'xlsx';
 import { 
   collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, 
-  where, updateDoc, doc, deleteDoc, setDoc, getDocFromServer 
+  where, updateDoc, doc, deleteDoc, setDoc, getDoc 
 } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from './lib/firestore-utils';
 
@@ -29,19 +29,6 @@ const App: React.FC = () => {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [view, setView] = useState<'form' | 'dashboard'>('form');
-
-  useEffect(() => {
-    async function testConnection() {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if(error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration. ");
-        }
-      }
-    }
-    testConnection();
-  }, []);
 
   const [formData, setFormData] = useState<DataRequestForm>({
     fullName: '',
@@ -90,13 +77,17 @@ const App: React.FC = () => {
   // Upload Result Modal States
   const [uploadModalReq, setUploadModalReq] = useState<DataRequest | null>(null);
   const [customDownloadPinInput, setCustomDownloadPinInput] = useState('');
-  const [resultFileName, setResultFileName] = useState('');
-  const [resultFileUrl, setResultFileUrl] = useState('');
+  const [selectedResultFiles, setSelectedResultFiles] = useState<ResultFileInfo[]>([]);
   const [resultDriveUrl, setResultDriveUrl] = useState('');
   const [resultNotes, setResultNotes] = useState('');
   const [resultStatus, setResultStatus] = useState<'COMPLETED' | 'PROCESSING'>('COMPLETED');
   const [isSavingResult, setIsSavingResult] = useState(false);
   const [resultFileError, setResultFileError] = useState<string | null>(null);
+  const [saveResultError, setSaveResultError] = useState<string | null>(null);
+  const [saveResultSuccess, setSaveResultSuccess] = useState<boolean>(false);
+  const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
 
   // Reject Request Modal States
   const [rejectModalReq, setRejectModalReq] = useState<DataRequest | null>(null);
@@ -180,6 +171,129 @@ const App: React.FC = () => {
     }
   };
 
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes || bytes === 0) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const CHUNK_SIZE = 300000; // ~300KB characters per chunk, well within Firestore 1MB doc limit
+
+  const triggerDownload = (url: string, filename: string) => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleDownloadResultFile = async (req: DataRequest, file: ResultFileInfo) => {
+    try {
+      setDownloadingFileId(file.id);
+      // 1. If URL is already cached/present in memory (e.g. newly selected)
+      if (file.url) {
+        triggerDownload(file.url, file.name);
+        return;
+      }
+
+      // 2. Otherwise fetch from subcollection requests/{requestId}/resultFiles/{fileId}
+      const fileDocRef = doc(db, 'requests', req.id, 'resultFiles', file.id);
+      const fileSnap = await getDoc(fileDocRef);
+      if (fileSnap.exists()) {
+        const fileData = fileSnap.data();
+        // Case A: Single URL stored
+        if (fileData.url) {
+          triggerDownload(fileData.url, file.name || fileData.name);
+          return;
+        }
+
+        // Case B: Subcollection chunks (robust for 1MB+ files)
+        if (fileData.hasChunks && fileData.chunkCount) {
+          const chunkPromises = [];
+          for (let i = 0; i < fileData.chunkCount; i++) {
+            chunkPromises.push(getDoc(doc(db, 'requests', req.id, 'resultFiles', file.id, 'chunks', String(i))));
+          }
+          const chunkSnaps = await Promise.all(chunkPromises);
+          const fullDataUrl = chunkSnaps.map(s => s.data()?.data || '').join('');
+          if (fullDataUrl) {
+            triggerDownload(fullDataUrl, file.name || fileData.name);
+            return;
+          }
+        }
+
+        // Case C: Legacy chunks array on the document itself
+        if (Array.isArray(fileData.chunks) && fileData.chunks.length > 0) {
+          triggerDownload(fileData.chunks.join(''), file.name || fileData.name);
+          return;
+        }
+      }
+
+      // 3. Fallback to legacy single file if present
+      if (req.resultFileUrl) {
+        triggerDownload(req.resultFileUrl, req.resultFileName || file.name);
+      } else {
+        alert(`File ${file.name} tidak ditemukan di database.`);
+      }
+    } catch (err: any) {
+      console.error('Error downloading file:', err);
+      alert('Gagal mengunduh file: ' + (err?.message || 'Terjadi kesalahan sistem'));
+    } finally {
+      setDownloadingFileId(null);
+    }
+  };
+
+  const handleDownloadSupportingDoc = async (req: DataRequest) => {
+    try {
+      setDownloadingDocId(req.id);
+      // 1. If direct URL stored on request
+      if (req.supportingDocUrl) {
+        triggerDownload(req.supportingDocUrl, req.supportingDocName || 'dokumen_pendukung');
+        return;
+      }
+
+      // 2. Check attachments subcollection requests/{requestId}/attachments/supportingDoc
+      const docRef = doc(db, 'requests', req.id, 'attachments', 'supportingDoc');
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const docData = docSnap.data();
+        if (docData.url) {
+          triggerDownload(docData.url, req.supportingDocName || docData.name || 'dokumen_pendukung');
+          return;
+        }
+        if (docData.hasChunks && docData.chunkCount) {
+          const promises = [];
+          for (let i = 0; i < docData.chunkCount; i++) {
+            promises.push(getDoc(doc(db, 'requests', req.id, 'attachments', 'supportingDoc', 'chunks', String(i))));
+          }
+          const snaps = await Promise.all(promises);
+          const fullUrl = snaps.map(s => s.data()?.data || '').join('');
+          if (fullUrl) {
+            triggerDownload(fullUrl, req.supportingDocName || docData.name || 'dokumen_pendukung');
+            return;
+          }
+        }
+      }
+      alert('File dokumen pendukung tidak ditemukan di database.');
+    } catch (err: any) {
+      console.error('Error downloading supporting doc:', err);
+      alert('Gagal mengunduh dokumen: ' + (err?.message || 'Terjadi kesalahan'));
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
+
+  const handleDownloadAllFiles = async (req: DataRequest) => {
+    const files = req.resultFiles;
+    if (!files || files.length === 0) return;
+    for (const f of files) {
+      await handleDownloadResultFile(req, f);
+      // Small pause between multiple browser downloads
+      await new Promise(r => setTimeout(r, 400));
+    }
+  };
+
   const handleOpenUploadModal = (req: DataRequest) => {
     setUploadModalReq(req);
     
@@ -187,12 +301,27 @@ const App: React.FC = () => {
     const initialPin = req.downloadPin || Math.floor(100000 + Math.random() * 900000).toString();
     setCustomDownloadPinInput(initialPin);
 
-    setResultFileName(req.resultFileName || '');
-    setResultFileUrl(req.resultFileUrl || '');
+    // Populate existing files
+    if (req.resultFiles && req.resultFiles.length > 0) {
+      setSelectedResultFiles(req.resultFiles.map(f => ({ ...f })));
+    } else if (req.resultFileName) {
+      setSelectedResultFiles([{
+        id: 'legacy-1',
+        name: req.resultFileName,
+        size: 0,
+        type: 'application/octet-stream',
+        url: req.resultFileUrl
+      }]);
+    } else {
+      setSelectedResultFiles([]);
+    }
+
     setResultDriveUrl(req.resultDriveUrl || '');
     setResultNotes(req.resultNotes || '');
     setResultStatus(req.status === 'REJECTED' || req.status === 'PENDING' ? 'COMPLETED' : (req.status as 'COMPLETED' | 'PROCESSING'));
     setResultFileError(null);
+    setSaveResultError(null);
+    setSaveResultSuccess(false);
   };
 
   const handleOpenDownloadModal = (req: DataRequest) => {
@@ -215,59 +344,183 @@ const App: React.FC = () => {
   };
 
   const handleResultFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = e.target.files;
     setResultFileError(null);
-    if (!file) return;
+    setSaveResultError(null);
+    if (!files || files.length === 0) return;
 
-    const MAX_SIZE = 800 * 1024; // 800KB
-    if (file.size > MAX_SIZE) {
-      setResultFileError('File terlalu besar (> 800KB). Untuk file besar, gunakan Tautan Drive / Cloud Storage di bawah.');
-      e.target.value = '';
-      return;
+    // Up to 1MB per file (1,048,576 bytes)
+    const MAX_FILE_SIZE = 1024 * 1024;
+    const fileList: File[] = Array.from(files);
+
+    for (const f of fileList) {
+      if (f.size > MAX_FILE_SIZE) {
+        setResultFileError(
+          `File "${f.name}" (${(f.size / (1024 * 1024)).toFixed(2)} MB) melebihi batas 1MB per file. Untuk file besar, silakan gunakan kolom Tautan Google Drive / Cloud Storage di bawah.`
+        );
+        e.target.value = '';
+        return;
+      }
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setResultFileName(file.name);
-      setResultFileUrl(reader.result as string);
-    };
-    reader.onerror = () => {
-      setResultFileError('Gagal membaca file. Silakan coba lagi.');
-    };
-    reader.readAsDataURL(file);
+    let loadedCount = 0;
+    const newItems: ResultFileInfo[] = [];
+
+    fileList.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        newItems.push({
+          id: Math.random().toString(36).substring(2, 10),
+          name: file.name,
+          size: file.size,
+          type: file.type || 'application/octet-stream',
+          url: reader.result as string
+        });
+        loadedCount++;
+        if (loadedCount === fileList.length) {
+          setSelectedResultFiles(prev => [...prev, ...newItems]);
+        }
+      };
+      reader.onerror = () => {
+        setResultFileError(`Gagal membaca file ${file.name}. Silakan coba lagi.`);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    e.target.value = '';
   };
 
-  const handleRemoveResultFile = () => {
-    setResultFileName('');
-    setResultFileUrl('');
+  const handleRemoveResultFile = (fileId: string) => {
+    setSelectedResultFiles(prev => prev.filter(f => f.id !== fileId));
     setResultFileError(null);
+    setSaveResultError(null);
   };
 
   const handleSaveResult = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadModalReq) return;
 
-    if (!resultFileName && !resultDriveUrl && !resultNotes.trim()) {
-      setResultFileError('Harap lampirkan file hasil data, tautan drive, atau isi catatan hasil.');
+    setResultFileError(null);
+    setSaveResultError(null);
+    setSaveResultSuccess(false);
+
+    if (selectedResultFiles.length === 0 && !resultDriveUrl.trim() && !resultNotes.trim()) {
+      setResultFileError('Harap lampirkan minimal satu file hasil data, tautan drive, atau isi catatan hasil.');
       return;
     }
 
     setIsSavingResult(true);
     try {
-      const requestRef = doc(db, 'requests', uploadModalReq.id);
-      await updateDoc(requestRef, {
+      const requestId = uploadModalReq.id;
+
+      // 1. Save each newly selected file with content to subcollection requests/{requestId}/resultFiles/{file.id}
+      for (const file of selectedResultFiles) {
+        if (file.url) {
+          const fileDocRef = doc(db, 'requests', requestId, 'resultFiles', file.id);
+          const dataUrl = file.url;
+          if (dataUrl.length <= 350000) {
+            // Small file (< 350KB chars): Store directly in file doc
+            await setDoc(fileDocRef, {
+              id: file.id,
+              name: file.name,
+              size: file.size,
+              type: file.type || 'application/octet-stream',
+              url: dataUrl,
+              hasChunks: false,
+              uploadedAt: serverTimestamp()
+            });
+          } else {
+            // Large file (up to 1MB / 1.33MB base64): Split into chunks of 300,000 characters
+            const totalChunks = Math.ceil(dataUrl.length / CHUNK_SIZE);
+            for (let i = 0; i < totalChunks; i++) {
+              const chunkDocRef = doc(db, 'requests', requestId, 'resultFiles', file.id, 'chunks', String(i));
+              await setDoc(chunkDocRef, {
+                index: i,
+                data: dataUrl.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
+              });
+            }
+            await setDoc(fileDocRef, {
+              id: file.id,
+              name: file.name,
+              size: file.size,
+              type: file.type || 'application/octet-stream',
+              hasChunks: true,
+              chunkCount: totalChunks,
+              uploadedAt: serverTimestamp()
+            });
+          }
+        }
+      }
+
+      // 2. Prepare lightweight resultFiles summary for parent document (NO base64, perfectly small!)
+      const resultFilesMeta: ResultFileInfo[] = selectedResultFiles.map(f => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        type: f.type || 'application/octet-stream'
+      }));
+
+      const firstFile = selectedResultFiles[0];
+
+      // 3. If uploadModalReq had an oversized supportingDocUrl, migrate it to subcollection attachments/supportingDoc
+      if (uploadModalReq.supportingDocUrl && uploadModalReq.supportingDocUrl.length > 300000) {
+        try {
+          const sUrl = uploadModalReq.supportingDocUrl;
+          const totalDocChunks = Math.ceil(sUrl.length / CHUNK_SIZE);
+          for (let i = 0; i < totalDocChunks; i++) {
+            const chunkDocRef = doc(db, 'requests', requestId, 'attachments', 'supportingDoc', 'chunks', String(i));
+            await setDoc(chunkDocRef, {
+              index: i,
+              data: sUrl.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
+            });
+          }
+          await setDoc(doc(db, 'requests', requestId, 'attachments', 'supportingDoc'), {
+            name: uploadModalReq.supportingDocName || 'dokumen_pendukung',
+            size: uploadModalReq.supportingDocSize || 0,
+            type: uploadModalReq.supportingDocType || 'application/octet-stream',
+            hasChunks: true,
+            chunkCount: totalDocChunks,
+            uploadedAt: serverTimestamp()
+          });
+        } catch (migrErr) {
+          console.warn('Could not migrate supportingDocUrl:', migrErr);
+        }
+      }
+
+      const requestRef = doc(db, 'requests', requestId);
+      const updatePayload: Record<string, any> = {
         status: resultStatus,
-        resultFileName: resultFileName || null,
-        resultFileUrl: resultFileUrl || null,
+        resultFiles: resultFilesMeta,
+        resultFileName: firstFile ? firstFile.name : null,
+        resultFileUrl: null, // Always null on parent doc to prevent 1MB limit and high quota consumption!
         resultDriveUrl: resultDriveUrl.trim() || null,
         resultNotes: resultNotes.trim() || null,
         downloadPin: customDownloadPinInput.trim() || '123456',
         resultUploadedAt: serverTimestamp()
-      });
+      };
 
-      setUploadModalReq(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `requests/${uploadModalReq.id}`);
+      // If supportingDoc was oversized on this document, null it out on parent doc so it shrinks below 1MB
+      if (uploadModalReq.supportingDocUrl && uploadModalReq.supportingDocUrl.length > 300000) {
+        updatePayload.supportingDocUrl = null;
+      }
+
+      await updateDoc(requestRef, updatePayload);
+
+      setSaveResultSuccess(true);
+      setTimeout(() => {
+        setUploadModalReq(null);
+        setSaveResultSuccess(false);
+      }, 1000);
+    } catch (error: any) {
+      console.error('Error saving result:', error);
+      const errMsg = error?.message || String(error);
+      if (errMsg.includes('exceeds maximum allowable size') || errMsg.includes('1048576')) {
+        setSaveResultError('File terlalu besar melebihi batas per dokumen database. Harap gunakan Tautan Google Drive.');
+      } else if (errMsg.includes('permission') || errMsg.includes('insufficient')) {
+        setSaveResultError('Akses ditolak (Permission Denied). Silakan muat ulang halaman.');
+      } else {
+        setSaveResultError(`Gagal menyimpan: ${errMsg}`);
+      }
     } finally {
       setIsSavingResult(false);
     }
@@ -346,8 +599,32 @@ const App: React.FC = () => {
         ...doc.data()
       })) as DataRequest[];
       setRequests(fetchedRequests);
+      setQuotaError(null);
+      try {
+        localStorage.setItem(`cached_requests_${user.uid}`, JSON.stringify(fetchedRequests));
+      } catch {
+        // Ignore storage errors
+      }
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'requests');
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const isQuota = errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('resource-exhausted');
+      if (isQuota) {
+        setQuotaError(errMsg);
+        try {
+          const cached = localStorage.getItem(`cached_requests_${user.uid}`);
+          if (cached) {
+            setRequests(JSON.parse(cached));
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      } else {
+        try {
+          handleFirestoreError(error, OperationType.LIST, 'requests');
+        } catch {
+          // Handled permission error
+        }
+      }
     });
 
     return () => unsubscribe();
@@ -365,10 +642,10 @@ const App: React.FC = () => {
     setFileError(null);
     if (!file) return;
 
-    // Check file size (limit to 800KB)
-    const MAX_SIZE = 800 * 1024; // 819200 bytes
+    // Check file size (limit to 1MB)
+    const MAX_SIZE = 1024 * 1024; // 1MB
     if (file.size > MAX_SIZE) {
-      setFileError('File terlalu besar! Batas maksimal ukuran file adalah 800KB agar aman saat dikirim.');
+      setFileError('File terlalu besar! Batas maksimal ukuran file adalah 1MB.');
       e.target.value = ''; // Reset input
       return;
     }
@@ -441,12 +718,42 @@ const App: React.FC = () => {
         return acc;
       }, {} as Record<string, any>);
 
+      // If supportingDoc is large (> 300,000 chars), chunk it to subcollection so the main document stays well under 1MB
+      const hasLargeDoc = formData.supportingDocUrl && formData.supportingDocUrl.length > 300000;
+      if (hasLargeDoc) {
+        cleanedData.supportingDocUrl = null;
+      }
+
       const docRef = await addDoc(collection(db, 'requests'), {
         ...cleanedData,
         uid: user.uid,
         createdAt: serverTimestamp(),
         status: 'PENDING'
       });
+
+      if (hasLargeDoc && formData.supportingDocUrl) {
+        try {
+          const sUrl = formData.supportingDocUrl;
+          const totalDocChunks = Math.ceil(sUrl.length / CHUNK_SIZE);
+          for (let i = 0; i < totalDocChunks; i++) {
+            await setDoc(doc(db, 'requests', docRef.id, 'attachments', 'supportingDoc', 'chunks', String(i)), {
+              index: i,
+              data: sUrl.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
+            });
+          }
+          await setDoc(doc(db, 'requests', docRef.id, 'attachments', 'supportingDoc'), {
+            name: formData.supportingDocName || 'dokumen_pendukung',
+            size: formData.supportingDocSize || 0,
+            type: formData.supportingDocType || 'application/octet-stream',
+            hasChunks: true,
+            chunkCount: totalDocChunks,
+            uploadedAt: serverTimestamp()
+          });
+        } catch (subErr) {
+          console.warn('Failed to upload supporting doc chunks:', subErr);
+        }
+      }
+
       setCreatedRequestId(docRef.id);
       setSubmitted(true);
 
@@ -721,6 +1028,34 @@ const App: React.FC = () => {
         </div>
       </nav>
 
+      {/* Quota Exceeded Alert Banner */}
+      {quotaError && (
+        <div className="bg-amber-500/10 border-b border-amber-300 px-4 py-3 sm:px-6">
+          <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="text-xl">⚠️</span>
+              <div>
+                <h4 className="text-sm font-bold text-amber-900">
+                  Batas Kuota Harian Firestore Tercapai (Daily Read Quota Exceeded)
+                </h4>
+                <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                  Batas unit pembacaan harian gratis (free daily read units) Firestore untuk project ini telah mencapai kuota maksimal hari ini. Kuota akan otomatis di-reset besok. Anda juga dapat meng-upgrade database melalui Firebase Console.
+                </p>
+              </div>
+            </div>
+            <a
+              href="https://console.firebase.google.com/project/gen-lang-client-0195462066/firestore/databases/ai-studio-664224fd-2648-4b95-9fab-6c119960f71a/data?openUpgradeDialog=true"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shadow-2xs whitespace-nowrap self-end sm:self-center"
+            >
+              <span>Upgrade di Firebase Console</span>
+              <ExternalLinkIcon className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
         {view === 'form' ? (
           <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden flex flex-col md:flex-row">
@@ -926,7 +1261,7 @@ const App: React.FC = () => {
                           <span className="pl-1 text-slate-500">atau seret file ke sini</span>
                         </div>
                         <p className="text-xs text-slate-400">
-                          PDF, Word, Excel, atau Gambar (Maksimal 800KB)
+                          PDF, Word, Excel, atau Gambar (Maksimal 1MB)
                         </p>
                       </div>
                     ) : (
@@ -1341,18 +1676,24 @@ const App: React.FC = () => {
                                 <span className="font-semibold text-emerald-800 truncate" title={req.supportingDocName}>
                                   {req.supportingDocName}
                                 </span>
-                                {req.supportingDocUrl ? (
-                                  <a 
-                                    href={req.supportingDocUrl} 
-                                    download={req.supportingDocName}
-                                    className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold underline flex items-center mt-0.5"
-                                  >
-                                    <DownloadIcon className="w-2.5 h-2.5 mr-1" />
-                                    Download Dokumen
-                                  </a>
-                                ) : (
-                                  <span className="text-[10px] opacity-75">No download available</span>
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadSupportingDoc(req)}
+                                  disabled={downloadingDocId === req.id}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold underline flex items-center mt-0.5 cursor-pointer disabled:opacity-50"
+                                >
+                                  {downloadingDocId === req.id ? (
+                                    <>
+                                      <Spinner className="w-2.5 h-2.5 mr-1 text-indigo-600" />
+                                      <span>Mengunduh...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <DownloadIcon className="w-2.5 h-2.5 mr-1" />
+                                      <span>Download Dokumen</span>
+                                    </>
+                                  )}
+                                </button>
                               </div>
                             </div>
                           )}
@@ -1401,7 +1742,7 @@ const App: React.FC = () => {
                               </a>
                             </div>
                           </div>
-                        ) : (req.resultFileName || req.resultFileUrl || req.resultDriveUrl || req.resultNotes) ? (
+                        ) : (req.resultFileName || req.resultFileUrl || (req.resultFiles && req.resultFiles.length > 0) || req.resultDriveUrl || req.resultNotes) ? (
                           unlockedDownloads[req.id] ? (
                             <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-xl p-3.5 mt-3 shadow-2xs animate-in fade-in duration-200">
                               <div className="flex items-center justify-between gap-2 mb-2">
@@ -1435,8 +1776,61 @@ const App: React.FC = () => {
                                 </p>
                               )}
 
-                              <div className="flex flex-wrap items-center gap-2">
-                                {req.resultFileUrl && req.resultFileName && (
+                              {/* Multiple Files Download Section */}
+                              {req.resultFiles && req.resultFiles.length > 0 ? (
+                                <div className="space-y-2 mb-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[11px] font-bold text-emerald-950 flex items-center gap-1.5 uppercase tracking-wider">
+                                      <PaperclipIcon className="w-3.5 h-3.5 text-emerald-700" />
+                                      <span>Lampiran File ({req.resultFiles.length} file):</span>
+                                    </span>
+                                    {req.resultFiles.length > 1 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDownloadAllFiles(req)}
+                                        disabled={downloadingFileId !== null}
+                                        className="text-[10px] font-bold text-emerald-800 hover:text-emerald-950 bg-white hover:bg-emerald-100/80 border border-emerald-300 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 shadow-2xs"
+                                      >
+                                        <DownloadIcon className="w-3 h-3" />
+                                        <span>Unduh Semua File</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {req.resultFiles.map((file) => (
+                                      <button
+                                        key={file.id}
+                                        type="button"
+                                        onClick={() => handleDownloadResultFile(req, file)}
+                                        disabled={downloadingFileId === file.id}
+                                        className="flex items-center justify-between gap-2 bg-white hover:bg-emerald-50/80 border border-emerald-200/90 rounded-xl p-2.5 text-left transition-all shadow-2xs group cursor-pointer"
+                                        title={`Klik untuk mengunduh ${file.name}`}
+                                      >
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <div className="p-1.5 bg-emerald-100/70 text-emerald-700 rounded-lg group-hover:bg-emerald-200/70 transition-colors flex-shrink-0">
+                                            <PaperclipIcon className="w-3.5 h-3.5" />
+                                          </div>
+                                          <div className="min-w-0">
+                                            <p className="text-xs font-bold text-slate-800 truncate">{file.name}</p>
+                                            {file.size > 0 && (
+                                              <p className="text-[10px] text-slate-500 font-medium">{formatFileSize(file.size)}</p>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 text-emerald-700 text-xs font-bold flex-shrink-0 pl-1">
+                                          {downloadingFileId === file.id ? (
+                                            <Spinner className="w-3.5 h-3.5 text-emerald-600" />
+                                          ) : (
+                                            <DownloadIcon className="w-3.5 h-3.5 group-hover:translate-y-0.5 transition-transform" />
+                                          )}
+                                          <span className="hidden sm:inline">Unduh</span>
+                                        </div>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : req.resultFileUrl && req.resultFileName ? (
+                                <div className="mb-2.5">
                                   <a
                                     href={req.resultFileUrl}
                                     download={req.resultFileName}
@@ -1445,9 +1839,11 @@ const App: React.FC = () => {
                                     <DownloadIcon className="w-3.5 h-3.5" />
                                     <span>Unduh File: {req.resultFileName}</span>
                                   </a>
-                                )}
+                                </div>
+                              ) : null}
 
-                                {req.resultDriveUrl && (
+                              {req.resultDriveUrl && (
+                                <div className="mb-2">
                                   <a
                                     href={req.resultDriveUrl}
                                     target="_blank"
@@ -1457,8 +1853,8 @@ const App: React.FC = () => {
                                     <ExternalLinkIcon className="w-3.5 h-3.5 text-emerald-600" />
                                     <span>Buka Tautan Cloud / Drive</span>
                                   </a>
-                                )}
-                              </div>
+                                </div>
+                              )}
 
                               {isAdmin && (
                                 <div className="mt-2 text-xs font-mono bg-emerald-100/70 border border-emerald-300 text-emerald-950 rounded-lg p-2.5 flex items-center justify-between gap-2 shadow-2xs">
@@ -1830,49 +2226,75 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* File Attachment */}
+              {/* File Attachment - Multi-file support up to 1MB per file */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Pilih File Hasil Data (Maks. 800KB)
-                </label>
-                {resultFileName ? (
-                  <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <PaperclipIcon className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                      <span className="text-xs font-medium text-emerald-900 truncate">{resultFileName}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleRemoveResultFile}
-                      className="text-xs text-rose-600 hover:text-rose-800 font-semibold ml-2"
-                    >
-                      Hapus
-                    </button>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Pilih File Hasil Data <span className="text-indigo-600 font-semibold">(Maks. 1MB/file, bisa multi-file)</span>
+                  </label>
+                  {selectedResultFiles.length > 0 && (
+                    <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                      {selectedResultFiles.length} file dipilih • {formatFileSize(selectedResultFiles.reduce((acc, f) => acc + (f.size || 0), 0))}
+                    </span>
+                  )}
+                </div>
+
+                {selectedResultFiles.length > 0 && (
+                  <div className="space-y-1.5 mb-2 max-h-44 overflow-y-auto pr-1">
+                    {selectedResultFiles.map((file, idx) => (
+                      <div key={file.id || idx} className="flex items-center justify-between bg-emerald-50/90 border border-emerald-200 rounded-xl px-3 py-2 text-xs shadow-2xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <PaperclipIcon className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <span className="font-semibold text-emerald-950 truncate block max-w-xs sm:max-w-sm">{file.name}</span>
+                            {file.size > 0 && (
+                              <span className="text-[10px] text-emerald-700/80">{formatFileSize(file.size)}</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveResultFile(file.id)}
+                          className="text-xs text-rose-600 hover:text-rose-800 font-semibold ml-2 cursor-pointer p-1 hover:bg-rose-100/50 rounded-lg transition-colors flex-shrink-0"
+                          title="Hapus file ini"
+                        >
+                          Hapus
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ) : (
+                )}
+
+                <label className="cursor-pointer flex items-center justify-center gap-2 bg-slate-50 hover:bg-indigo-50/70 text-slate-700 hover:text-indigo-700 border border-dashed border-slate-300 hover:border-indigo-300 text-xs font-semibold py-2.5 px-3 rounded-xl transition-all text-center">
+                  <UploadIcon className="w-4 h-4 text-indigo-500 flex-shrink-0" />
+                  <span>{selectedResultFiles.length > 0 ? '+ Tambah File Lainnya (Bisa Pilih Banyak Sekaligus)' : 'Pilih File Hasil Data (Maks. 1MB/file, Bisa Pilih Banyak)'}</span>
                   <input
                     type="file"
+                    multiple
                     accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.csv,.png,.jpg,.jpeg"
                     onChange={handleResultFileChange}
-                    className="block w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                    className="sr-only"
                   />
-                )}
+                </label>
               </div>
 
               {/* Drive / Cloud Link */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Tautan Google Drive / Cloud Storage (Opsional)
+                  Tautan Google Drive / Cloud Storage <span className="text-slate-500 font-normal">(Opsional, untuk folder / file &gt; 1MB)</span>
                 </label>
                 <input
                   type="url"
-                  placeholder="https://drive.google.com/file/d/..."
+                  placeholder="https://drive.google.com/file/d/... atau https://docs.google.com/..."
                   value={resultDriveUrl}
-                  onChange={(e) => setResultDriveUrl(e.target.value)}
+                  onChange={(e) => {
+                    setResultDriveUrl(e.target.value);
+                    setSaveResultError(null);
+                  }}
                   className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
-                <p className="text-[10px] text-slate-400 mt-0.5">
-                  Gunakan tautan ini jika ukuran file lebih besar dari 800KB atau berupa folder.
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Sangat disarankan untuk file Excel/PDF rekap berukuran besar agar dokumen tersimpan lancar tanpa batasan kuota database.
                 </p>
               </div>
 
@@ -1885,14 +2307,32 @@ const App: React.FC = () => {
                   rows={3}
                   placeholder="Contoh: Data rekapitulasi usaha pariwisata Jakbar tahun 2026 telah diverifikasi dan dilampirkan."
                   value={resultNotes}
-                  onChange={(e) => setResultNotes(e.target.value)}
+                  onChange={(e) => {
+                    setResultNotes(e.target.value);
+                    setSaveResultError(null);
+                  }}
                   className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
               {resultFileError && (
-                <div className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2.5">
-                  ⚠️ {resultFileError}
+                <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 animate-in fade-in">
+                  <span className="text-sm">⚠️</span>
+                  <span className="leading-relaxed">{resultFileError}</span>
+                </div>
+              )}
+
+              {saveResultError && (
+                <div className="text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 animate-in fade-in">
+                  <span className="text-sm">❌</span>
+                  <div className="leading-relaxed font-medium">{saveResultError}</div>
+                </div>
+              )}
+
+              {saveResultSuccess && (
+                <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center gap-2 animate-in fade-in">
+                  <DoneIcon className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                  <span className="font-bold">Hasil data berhasil disimpan & status diperbarui!</span>
                 </div>
               )}
 
@@ -1908,7 +2348,8 @@ const App: React.FC = () => {
                 <Button
                   type="submit"
                   isLoading={isSavingResult}
-                  className="text-xs py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white"
+                  disabled={isSavingResult || saveResultSuccess}
+                  className="text-xs py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
                 >
                   <UploadIcon className="w-3.5 h-3.5 mr-1.5" />
                   Simpan & Unggah Hasil Data

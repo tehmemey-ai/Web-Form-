@@ -33,6 +33,18 @@ export interface DataRequestForm {
   supportingDocUrl?: string;
 }
 
+export interface ResultFileInfo {
+  id: string;
+  name: string;
+  size: number;
+  type?: string;
+  url?: string;
+  chunks?: string[];
+  hasChunks?: boolean;
+  chunkCount?: number;
+  uploadedAt?: any;
+}
+
 export interface DataRequest extends DataRequestForm {
   id: string;
   uid: string;
@@ -40,6 +52,7 @@ export interface DataRequest extends DataRequestForm {
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'REJECTED';
   resultFileName?: string;
   resultFileUrl?: string;
+  resultFiles?: ResultFileInfo[];
   resultNotes?: string;
   resultDriveUrl?: string;
   resultUploadedAt?: any;

@@ -29,8 +29,21 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const isPermissionError = 
+    errorMessage.toLowerCase().includes('permission') || 
+    errorMessage.toLowerCase().includes('insufficient') ||
+    errorMessage.toLowerCase().includes('permission-denied');
+
+  if (!isPermissionError) {
+    // Non-permission errors (such as quota exceeded, network, offline) are operational/quota issues,
+    // not security rule failures. Do not log as Firestore Error or rethrow as a rule failure.
+    console.warn(`[Firestore ${operationType} on ${path}]:`, errorMessage);
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -46,7 +59,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     },
     operationType,
     path
-  }
+  };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }

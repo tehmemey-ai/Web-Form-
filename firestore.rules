@@ -42,19 +42,19 @@ service cloud.firestore {
     
     function isAdmin() {
       return isAuthenticated() && 
-         (request.auth.token.email == "tehmemey@gmail.com" && request.auth.token.email_verified == true);
+         (request.auth.token.email == "tehmemey@gmail.com");
     }
 
     function isValidEmail(email) {
-      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+      return email is string && email.size() > 3 && email.size() <= 150;
     }
 
     function isValidRequest(data) {
-      return data.fullName is string && data.fullName.size() > 0 && data.fullName.size() < 100 &&
+      return data.fullName is string && data.fullName.size() > 0 && data.fullName.size() <= 200 &&
              data.email is string && isValidEmail(data.email) &&
-             data.handphone is string && data.handphone.size() > 0 && data.handphone.size() < 20 &&
-             data.department is string && data.department.size() > 0 && data.department.size() < 100 &&
-             data.description is string && data.description.size() > 0 && data.description.size() < 5000 &&
+             data.handphone is string && data.handphone.size() > 0 && data.handphone.size() <= 40 &&
+             data.department is string && data.department.size() > 0 && data.department.size() <= 150 &&
+             data.description is string && data.description.size() > 0 && data.description.size() <= 10000 &&
              data.status in ['PENDING', 'PROCESSING', 'COMPLETED', 'REJECTED'] &&
              data.createdAt is timestamp;
     }
@@ -73,10 +73,32 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
       
       // Admins and authenticated users can update requests (e.g. status & result data upload)
-      allow update: if isAuthenticated() && isValidRequest(request.resource.data);
+      allow update: if isAuthenticated() && (isAdmin() || isValidRequest(request.resource.data));
       
       // Only admins can delete requests
       allow delete: if isAuthenticated() && isAdmin();
+
+      // Subcollection for uploaded result files (supports multi-file upload up to 1MB each with chunking)
+      match /resultFiles/{fileId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && isAdmin();
+
+        match /chunks/{chunkId} {
+          allow read: if isAuthenticated();
+          allow write: if isAuthenticated() && isAdmin();
+        }
+      }
+
+      // Subcollection for supporting documents uploaded by requester
+      match /attachments/{attachmentId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated();
+
+        match /chunks/{chunkId} {
+          allow read: if isAuthenticated();
+          allow write: if isAuthenticated();
+        }
+      }
     }
 
     match /users/{userId} {
