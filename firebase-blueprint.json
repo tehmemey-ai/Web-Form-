@@ -34,6 +34,7 @@
         "chatId": { "type": "string", "description": "Target Chat ID or Group ID." },
         "enabled": { "type": "boolean", "description": "Whether Telegram notifications are active." },
         "topicId": { "type": "string", "description": "Optional Message Thread ID for forum topics." },
+        "adminWhatsapp": { "type": "string", "description": "Admin WhatsApp number for direct Japri Admin links." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Timestamp when settings were updated." },
         "updatedBy": { "type": "string", "description": "Email of admin who updated the settings." }
       }

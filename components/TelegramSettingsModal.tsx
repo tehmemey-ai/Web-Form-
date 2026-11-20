@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { TelegramConfig } from '../types';
-import { sendTelegramMessage, formatTestTelegramMessage } from '../services/telegramService';
+import { sendTelegramMessage, formatTestTelegramMessage, formatWaNumber } from '../services/telegramService';
 import { 
   CloseIcon, BellIcon, SettingsIcon, SendIcon, CheckIcon, Spinner, 
   HelpCircleIcon, EyeIcon, LockIcon, InfoIcon 
@@ -26,6 +26,7 @@ export const TelegramSettingsModal: React.FC<TelegramSettingsModalProps> = ({
   const [botToken, setBotToken] = useState<string>(config.botToken || '');
   const [chatId, setChatId] = useState<string>(config.chatId || '');
   const [topicId, setTopicId] = useState<string>(config.topicId || '');
+  const [adminWhatsapp, setAdminWhatsapp] = useState<string>(config.adminWhatsapp || '');
   const [showToken, setShowToken] = useState<boolean>(false);
   const [showGuide, setShowGuide] = useState<boolean>(false);
 
@@ -34,6 +35,18 @@ export const TelegramSettingsModal: React.FC<TelegramSettingsModalProps> = ({
 
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setEnabled(config.enabled ?? false);
+      setBotToken(config.botToken || '');
+      setChatId(config.chatId || '');
+      setTopicId(config.topicId || '');
+      setAdminWhatsapp(config.adminWhatsapp || '');
+      setTestResult(null);
+      setSaveSuccess(false);
+    }
+  }, [isOpen, config]);
 
   if (!isOpen) return null;
 
@@ -51,7 +64,7 @@ export const TelegramSettingsModal: React.FC<TelegramSettingsModalProps> = ({
     setSaveSuccess(false);
 
     try {
-      const testMessage = formatTestTelegramMessage(adminName);
+      const testMessage = formatTestTelegramMessage(adminName, adminWhatsapp.trim());
       const res = await sendTelegramMessage(botToken.trim(), chatId.trim(), testMessage, topicId.trim());
 
       if (res.success) {
@@ -85,6 +98,7 @@ export const TelegramSettingsModal: React.FC<TelegramSettingsModalProps> = ({
         botToken: botToken.trim(),
         chatId: chatId.trim(),
         topicId: topicId.trim() || undefined,
+        adminWhatsapp: adminWhatsapp.trim(),
         enabled: enabled
       });
       setSaveSuccess(true);
@@ -120,7 +134,7 @@ export const TelegramSettingsModal: React.FC<TelegramSettingsModalProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-lg font-bold text-slate-900">Pengaturan Notifikasi Telegram</h3>
+              <h3 className="text-lg font-bold text-slate-900">Pengaturan Telegram &amp; WA Admin</h3>
               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                 enabled && botToken && chatId 
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
@@ -130,12 +144,32 @@ export const TelegramSettingsModal: React.FC<TelegramSettingsModalProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Kirimkan alert otomatis ke Telegram admin/grup saat ada permohonan data baru yang disubmit.
+              Atur nomor WA Admin untuk tombol "Japri Admin" &amp; notifikasi Telegram otomatis (termasuk tombol 1-klik kirim PIN ke WA pemohon).
             </p>
           </div>
         </div>
 
         <form onSubmit={handleFormSubmit} className="space-y-4">
+          {/* Admin WhatsApp Number Input */}
+          <div className="bg-emerald-50/70 border border-emerald-200/90 rounded-xl p-4">
+            <label className="block text-xs font-bold text-emerald-950 mb-1">
+              Nomor WhatsApp Admin (Tujuan "Japri Admin")
+            </label>
+            <input
+              type="tel"
+              value={adminWhatsapp}
+              onChange={(e) => setAdminWhatsapp(e.target.value)}
+              placeholder="Contoh: 081234567890 atau 6281234567890"
+              className="w-full text-xs font-mono bg-white border border-emerald-300 rounded-xl px-3.5 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+            />
+            <p className="text-[11px] text-emerald-800/80 mt-1.5 leading-relaxed">
+              {adminWhatsapp.trim()
+                ? <>Tombol <strong>Japri Admin</strong> milik pemohon akan langsung membuka chat WA ke <code className="bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-bold text-emerald-900">wa.me/{formatWaNumber(adminWhatsapp)}</code>.</>
+                : 'Isi nomor WA Anda agar tombol "Japri Admin" otomatis mengarah langsung ke chat WA Anda.'
+              }
+            </p>
+          </div>
+
           {/* Toggle Switch Enabled */}
           <div className="bg-slate-50 border border-slate-200/90 rounded-xl p-4 flex items-center justify-between gap-3">
             <div>
@@ -143,7 +177,7 @@ export const TelegramSettingsModal: React.FC<TelegramSettingsModalProps> = ({
                 Aktifkan Notifikasi Telegram Otomatis
               </label>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Bot akan mengirim detail permohonan ke Chat ID yang ditentukan setiap kali form disubmit.
+                Bot mengirim notif saat ada permohonan baru &amp; saat pemohon klik "Japri Admin" minta PIN (lengkap dengan PIN + tombol 1-klik balas WA).
               </p>
             </div>
             <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">

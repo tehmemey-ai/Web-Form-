@@ -71,6 +71,7 @@ export interface TelegramConfig {
   chatId: string;
   enabled: boolean;
   topicId?: string;
+  adminWhatsapp?: string;
   updatedAt?: any;
   updatedBy?: string;
 }

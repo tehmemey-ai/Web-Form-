@@ -1,7 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { RequestCategory, UrgencyLevel, DataRequestForm, DataRequest, TelegramConfig, ResultFileInfo } from './types';
 import { refineDescription, suggestCategory } from './services/geminiService';
-import { sendTelegramMessage, formatNewRequestTelegramMessage } from './services/telegramService';
+import {
+  sendTelegramMessage,
+  formatNewRequestTelegramMessage,
+  formatPinRequestTelegramMessage,
+  formatRejectionInquiryTelegramMessage,
+  buildWaUrl
+} from './services/telegramService';
 import { TelegramSettingsModal } from './components/TelegramSettingsModal';
 import Input from './components/Input';
 import Select from './components/Select';
@@ -192,6 +198,7 @@ const App: React.FC = () => {
     return { botToken: '', chatId: '', enabled: false };
   });
   const [isTelegramModalOpen, setIsTelegramModalOpen] = useState(false);
+  const lastJapriNotifyRef = useRef<Record<string, number>>({});
 
   // Listen to Telegram Settings from Firestore
   useEffect(() => {
@@ -216,6 +223,7 @@ const App: React.FC = () => {
       botToken: newConfig.botToken || '',
       chatId: newConfig.chatId || '',
       topicId: newConfig.topicId || '',
+      adminWhatsapp: newConfig.adminWhatsapp || '',
       enabled: Boolean(newConfig.enabled),
       updatedAt: serverTimestamp(),
       updatedBy: user?.email || 'admin'
@@ -229,6 +237,56 @@ const App: React.FC = () => {
       } catch (e) {}
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'settings/telegram');
+    }
+  };
+
+  // Send instant 1-click Telegram notification to Admin whenever a requester clicks "Japri Admin"
+  const handleNotifyAdminJapri = (req: DataRequest, type: 'pin' | 'rejection') => {
+    if (isAdmin) return;
+    if (!telegramConfig.enabled || !telegramConfig.botToken || !telegramConfig.chatId) return;
+
+    const dedupeKey = `${type}:${req.id}`;
+    const now = Date.now();
+    if (lastJapriNotifyRef.current[dedupeKey] && now - lastJapriNotifyRef.current[dedupeKey] < 15000) {
+      return;
+    }
+    lastJapriNotifyRef.current[dedupeKey] = now;
+
+    try {
+      if (type === 'pin') {
+        const { html, waReplyUrl } = formatPinRequestTelegramMessage({
+          id: req.id,
+          fullName: req.fullName,
+          handphone: req.handphone,
+          department: req.department,
+          category: req.category,
+          downloadPin: req.downloadPin || '123456'
+        });
+        sendTelegramMessage(
+          telegramConfig.botToken,
+          telegramConfig.chatId,
+          html,
+          telegramConfig.topicId,
+          [[{ text: '💬 Kirim PIN ke WA Pemohon', url: waReplyUrl }]]
+        ).catch(err => console.warn('Telegram PIN notify error:', err));
+      } else {
+        const { html, waReplyUrl } = formatRejectionInquiryTelegramMessage({
+          id: req.id,
+          fullName: req.fullName,
+          handphone: req.handphone,
+          department: req.department,
+          rejectionReason: req.rejectionReason || req.resultNotes
+        });
+        sendTelegramMessage(
+          telegramConfig.botToken,
+          telegramConfig.chatId,
+          html,
+          telegramConfig.topicId,
+          [[{ text: '💬 Balas Pemohon via WA', url: waReplyUrl }]]
+        ).catch(err => console.warn('Telegram rejection notify error:', err));
+      }
+    } catch (err) {
+      console.warn('Error notifying admin via Telegram:', err);
     }
   };
 
@@ -1488,13 +1546,13 @@ const App: React.FC = () => {
                     <button
                       onClick={() => setIsTelegramModalOpen(true)}
                       className="inline-flex items-center gap-2 text-xs font-bold py-2 px-3.5 rounded-xl border border-sky-200 bg-sky-50/90 hover:bg-sky-100 text-sky-800 transition-all shadow-2xs hover:shadow-xs group cursor-pointer"
-                      title="Atur bot notifikasi Telegram otomatis"
+                      title="Atur nomor WA Admin & bot notifikasi Telegram otomatis"
                     >
                       <div className="relative flex items-center justify-center">
                         <span className={`w-2 h-2 rounded-full ${telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                       </div>
                       <SendIcon className="w-3.5 h-3.5 text-sky-600 group-hover:scale-110 transition-transform" />
-                      <span>Telegram</span>
+                      <span>Telegram &amp; WA</span>
                       <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
                         telegramConfig.enabled && telegramConfig.botToken && telegramConfig.chatId
                           ? 'bg-emerald-100 text-emerald-800'
@@ -1897,9 +1955,12 @@ const App: React.FC = () => {
                               <span className="text-rose-800/80 text-[11px] font-medium">Ada pertanyaan terkait penolakan?</span>
                               <a
                                 href={isAdmin
-                                  ? (req.handphone ? `https://wa.me/${req.handphone.replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo ${req.fullName}, mengenai permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) yang ditolak: ${req.rejectionReason || ''}`)}` : `https://wa.me/?text=${encodeURIComponent(`Halo ${req.fullName}, mengenai permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) yang ditolak.`)}`)
-                                  : `https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin menanyakan lebih lanjut mengenai alasan penolakan permohonan data saya dengan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName}.`)}`
+                                  ? buildWaUrl(req.handphone, `Halo ${req.fullName}, mengenai permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) yang ditolak${req.rejectionReason ? `: ${req.rejectionReason}` : '.'}`)
+                                  : buildWaUrl(telegramConfig.adminWhatsapp, `Halo Admin, saya ingin menanyakan lebih lanjut mengenai alasan penolakan permohonan data saya dengan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName}.`)
                                 }
+                                onClick={() => {
+                                  if (!isAdmin) handleNotifyAdminJapri(req, 'rejection');
+                                }}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-3 py-1.5 rounded-xl transition-all shadow-2xs"
@@ -2089,7 +2150,7 @@ const App: React.FC = () => {
                                 <div className="flex items-center gap-2 flex-shrink-0">
                                   {isAdmin ? (
                                     <a
-                                      href={req.handphone ? `https://wa.me/${req.handphone.replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo ${req.fullName}, permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) telah selesai diproses. PIN Akses Anda adalah: ${req.downloadPin || '123456'}.`)}` : `https://wa.me/?text=${encodeURIComponent(`Halo ${req.fullName}, permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) telah selesai diproses. PIN Akses Anda adalah: ${req.downloadPin || '123456'}.`)}`}
+                                      href={buildWaUrl(req.handphone, `Halo ${req.fullName}, permohonan data Anda (Request ID: #${req.id.slice(0, 8).toUpperCase()}) telah selesai diproses. PIN Akses Anda adalah: ${req.downloadPin || '123456'}.`)}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="inline-flex items-center gap-1 bg-white hover:bg-amber-100/50 text-amber-900 border border-amber-300 font-semibold text-xs px-3 py-2 rounded-xl transition-all shadow-2xs"
@@ -2099,7 +2160,8 @@ const App: React.FC = () => {
                                     </a>
                                   ) : (
                                     <a
-                                      href={`https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName} (${req.category}).`)}`}
+                                      href={buildWaUrl(telegramConfig.adminWhatsapp, `Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${req.id.slice(0, 8).toUpperCase()} atas nama ${req.fullName} (${req.category}).`)}
+                                      onClick={() => handleNotifyAdminJapri(req, 'pin')}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="inline-flex items-center gap-1 bg-white hover:bg-amber-100/50 text-amber-900 border border-amber-300 font-semibold text-xs px-3 py-2 rounded-xl transition-all shadow-2xs"
@@ -2260,9 +2322,12 @@ const App: React.FC = () => {
                 </span>
                 <a
                   href={isAdmin 
-                    ? (downloadModalReq.handphone ? `https://wa.me/${downloadModalReq.handphone.replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo ${downloadModalReq.fullName}, PIN Akses permohonan data Anda (Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()}) adalah: ${downloadModalReq.downloadPin || '123456'}.`)}` : `https://wa.me/?text=${encodeURIComponent(`Halo ${downloadModalReq.fullName}, PIN Akses permohonan data Anda (Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()}) adalah: ${downloadModalReq.downloadPin || '123456'}.`)}`)
-                    : `https://wa.me/?text=${encodeURIComponent(`Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()} atas nama ${downloadModalReq.fullName} (${downloadModalReq.category}).`)}`
+                    ? buildWaUrl(downloadModalReq.handphone, `Halo ${downloadModalReq.fullName}, PIN Akses permohonan data Anda (Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()}) adalah: ${downloadModalReq.downloadPin || '123456'}.`)
+                    : buildWaUrl(telegramConfig.adminWhatsapp, `Halo Admin, saya ingin meminta PIN Akses untuk mengunduh hasil data permohonan Request ID: #${downloadModalReq.id.slice(0, 8).toUpperCase()} atas nama ${downloadModalReq.fullName} (${downloadModalReq.category}).`)
                   }
+                  onClick={() => {
+                    if (!isAdmin) handleNotifyAdminJapri(downloadModalReq, 'pin');
+                  }}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-[11px] px-2.5 py-1.5 rounded-lg flex-shrink-0 transition-all shadow-2xs"
@@ -2347,7 +2412,7 @@ const App: React.FC = () => {
                   </button>
                   {uploadModalReq.handphone && (
                     <a
-                      href={`https://wa.me/${uploadModalReq.handphone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Halo Bpk/Ibu ${uploadModalReq.fullName}, permohonan data Anda (${uploadModalReq.category}) telah selesai disiapkan. PIN Akses untuk mengunduh hasil data Anda adalah: *${customDownloadPinInput}*. Silakan masukkan PIN ini pada dashboard permohonan data. Terima kasih!`)}`}
+                      href={buildWaUrl(uploadModalReq.handphone, `Halo Bpk/Ibu ${uploadModalReq.fullName}, permohonan data Anda (${uploadModalReq.category}) telah selesai disiapkan. PIN Akses untuk mengunduh hasil data Anda adalah: *${customDownloadPinInput}*. Silakan masukkan PIN ini pada dashboard permohonan data. Terima kasih!`)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg flex-shrink-0 transition-all shadow-2xs"
